@@ -151,8 +151,11 @@ func processImports(result map[string]string, fileIndex map[string]string) error
 		for _, imp := range toImport {
 			basename := filepath.Base(imp)
 			if path, ok := fileIndex[basename]; ok {
-				// error can be ignored heuristically, but let's log it or just silently skip.
-				_ = readAndMerge(path, result)
+				if err := readAndMerge(path, result); err != nil {
+					log.Printf("spring properties: skipping import %q: %v", imp, err)
+				}
+			} else {
+				log.Printf("spring properties: import %q not found in file index", imp)
 			}
 		}
 	}
@@ -366,6 +369,8 @@ func FindStreamBindings(root string, patterns []*regexp.Regexp) (map[string][]St
 // StreamBindings extracts all Spring Cloud Stream bindings from a flattened properties map.
 // It returns one StreamBinding per binding that has a destination property.
 func StreamBindings(props map[string]string) []StreamBinding {
+	defaultBinder, _ := lookupRelaxed(props, "spring.cloud.stream.default-binder")
+
 	var bindings []StreamBinding
 	for k, v := range props {
 		m := bindingDestinationKey.FindStringSubmatch(k)
@@ -380,8 +385,10 @@ func StreamBindings(props map[string]string) []StreamBinding {
 		if nm := bindingNamePattern.FindStringSubmatch(bindingName); nm != nil {
 			b.Direction = BindingDirection(nm[2])
 		}
-		if binder, ok := props["spring.cloud.stream.bindings."+bindingName+".binder"]; ok {
+		if binder, ok := lookupRelaxed(props, "spring.cloud.stream.bindings."+bindingName+".binder"); ok {
 			b.Binder = binder
+		} else {
+			b.Binder = defaultBinder
 		}
 		bindings = append(bindings, b)
 	}
