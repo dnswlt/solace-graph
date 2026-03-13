@@ -101,11 +101,18 @@ func excludedProfile(filename string, excludeProfiles []*regexp.Regexp) bool {
 	return false
 }
 
+var mavenPlaceholderRe = regexp.MustCompile(`@([^@\s]+)@`)
+
 func readAndMerge(path string, result map[string]string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("spring properties: cannot read %s: %w", path, err)
 	}
+
+	// Pre-process to handle Maven placeholders like @project.name@ which are
+	// invalid in YAML if not quoted. We wrap them in double quotes.
+	data = mavenPlaceholderRe.ReplaceAll(data, []byte(`"$0"`))
+
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	for {
 		var root any
