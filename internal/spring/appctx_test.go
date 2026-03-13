@@ -14,7 +14,7 @@ func TestReadApplicationProperties(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	dir := filepath.Dir(file)
 
-	props, err := ReadApplicationProperties([]string{dir}, nil)
+	props, err := ReadApplicationProperties([]string{dir}, nil, nil)
 	if err != nil {
 		t.Fatalf("ReadApplicationProperties: %v", err)
 	}
@@ -30,6 +30,42 @@ func TestReadApplicationProperties(t *testing.T) {
 
 	for _, k := range keys {
 		fmt.Printf("%s = %s\n", k, props[k])
+	}
+}
+
+func TestReadApplicationPropertiesMixedYAMLKeys(t *testing.T) {
+	// A YAML key can itself contain dots, e.g. "nested.dots" under "topic.some".
+	// flattenValue joins these with ".", producing "topic.some.nested.dots" —
+	// the same key that fully-nested YAML would produce. Placeholder resolution
+	// must find the value regardless of which format was used.
+	content := []byte(`
+topic:
+  some:
+    nested.dots: my_topic_value
+spring:
+  cloud:
+    stream:
+      bindings:
+        myBinding-in-0:
+          destination: ${topic.some.nested.dots}
+`)
+	f, err := os.CreateTemp(t.TempDir(), "application*.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	props, err := ReadApplicationProperties([]string{f.Name()}, nil, nil)
+	if err != nil {
+		t.Fatalf("ReadApplicationProperties: %v", err)
+	}
+
+	dest := props["spring.cloud.stream.bindings.myBinding-in-0.destination"]
+	if dest != "my_topic_value" {
+		t.Errorf("expected %q, got %q", "my_topic_value", dest)
 	}
 }
 
@@ -87,7 +123,7 @@ application:
 		"application-imported.yml": importedYml,
 	}
 
-	props, err := ReadApplicationProperties([]string{appYml}, fileIndex)
+	props, err := ReadApplicationProperties([]string{appYml}, fileIndex, nil)
 	if err != nil {
 		t.Fatalf("ReadApplicationProperties: %v", err)
 	}
