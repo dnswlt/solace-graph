@@ -35,7 +35,7 @@ const (
 
 // StreamBinding represents a Spring Cloud Stream binding with its destination and binder.
 type StreamBinding struct {
-	BindingName string           // full name, e.g. "perronLockSender-out-0"
+	BindingName string           // full name, e.g. "yankeeDoodle-out-0"
 	Direction   BindingDirection // "in" or "out"
 	Destination string           // topic/queue name
 	Binder      string           // binder name, e.g. "kafka" or "solace"

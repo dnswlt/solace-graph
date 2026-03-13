@@ -45,11 +45,12 @@ sgraph graph -html report.html all_bindings.json > graph.json
 
 ## How it works
 
-1. **Discovery**: `sgraph` searches for `application*.yml` files under `src/main/resources` within the provided root directories.
-2. **Name determination**: It attempts to use the `artifactId` from a nearby `pom.xml` as the application name, falling back to the parent folder name if not found.
-3. **Binding matching**:
+1. **Discovery**: `sgraph` searches for `application*.yml` files under `src/main/resources` within the provided root directories. This discovery is heuristic and assumes a standard Spring Boot project structure.
+2. **Property resolution**: It parses the discovered YAML files and resolves property placeholders. It also supports `spring.config.import` directives, provided the imported files are located within the same repository.
+3. **Name determination**: It attempts to use the `artifactId` from a nearby `pom.xml` as the application name, falling back to the parent folder name if not found.
+4. **Binding matching**:
     - Input (consumer) and Output (producer) bindings are matched based on their destinations.
     - Topics are split into levels using `/`.
     - Matching handles wildcards (`*` for a single level, `>` for remaining levels).
     - Property placeholders like `${env.prod}` are automatically treated as a wildcard (`*`) within their topic level. This allows matching even when topics contain environment-specific parts.
-4. **Graph construction**: A node is created for each application, with directed edges representing dependencies (producing to or consuming from).
+5. **Graph construction**: A node is created for each application, with directed edges representing dependencies (producing to or consuming from).
