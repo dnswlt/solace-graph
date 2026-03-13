@@ -435,9 +435,14 @@ func MatchTopics(consumerTopic, producerTopic string) bool {
 }
 
 // TopicLevels normalizes a topic (placeholders to '*') and splits it into levels.
-// It returns nil if the topic contains a Request/Reply variable.
+// It returns nil if the topic contains a Request/Reply variable, or if the topic
+// consists entirely of unresolved placeholders with no literal structure — in that
+// case we have no information about topic shape and matching would produce false positives.
 func TopicLevels(topic string) []string {
 	if strings.Contains(topic, "${replyTopicWithWildcards|") {
+		return nil
+	}
+	if placeholderRe.ReplaceAllString(topic, "") == "" {
 		return nil
 	}
 	normalized := placeholderRe.ReplaceAllString(topic, "*")

@@ -263,6 +263,30 @@ func TestMatchTopics(t *testing.T) {
 			producer: "a/b/${replyTopicWithWildcards|uuid}",
 			want:     false,
 		},
+		{
+			name:     "Fully unresolved consumer does not match",
+			consumer: "${unresolved.topic}",
+			producer: "a/b/c",
+			want:     false,
+		},
+		{
+			name:     "Fully unresolved producer does not match",
+			consumer: "a/b/c",
+			producer: "${unresolved.topic}",
+			want:     false,
+		},
+		{
+			name:     "Multiple adjacent placeholders with no structure do not match",
+			consumer: "${prefix}${suffix}",
+			producer: "a/b/c",
+			want:     false,
+		},
+		{
+			name:     "Placeholder with literal structure still matches",
+			consumer: "${env}/b/c",
+			producer: "prod/b/c",
+			want:     true,
+		},
 	}
 
 	for _, tt := range tests {
