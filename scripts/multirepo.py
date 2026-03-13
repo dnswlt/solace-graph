@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 """
-multirepo.py - Clone, pull, or checkout latest tags for all repositories in a Bitbucket Data Center project.
+multirepo.py - Manage multiple repositories in a Bitbucket Data Center project.
 
-Usage:
-    python multirepo.py https://bitbucket.example.com/projects/MY_PROJECT [--target-dir ./repos] [--token TOKEN] [--ssh] [--jobs 4] [--mode {sync,checkout-tags}]
+This script provides two main commands:
+1. sync: Clones or pulls all repositories from a specific Bitbucket project.
+2. checkout-tags: Locally checks out the latest semver tag for all repositories in a directory.
+
+Usage Examples:
+    # Sync all repos from a project using a Personal Access Token:
+    python multirepo.py sync https://bitbucket.example.com/projects/MY_PROJ --token MY_TOKEN --target-dir ./repos
+
+    # Checkout the latest semver tags (e.g. v1.2.3) for all repos in a directory:
+    python multirepo.py checkout-tags --target-dir ./repos
 
 Authentication:
-    Pass a personal access token via --token or the BITBUCKET_TOKEN environment variable.
-    If neither is set, the script attempts unauthenticated access (works for public projects).
+    For 'sync', pass a personal access token via --token or the BITBUCKET_TOKEN environment variable.
+    The script will fail fast (GIT_TERMINAL_PROMPT=0) if authentication fails to prevent hangs during parallel execution.
 """
 
 import argparse
@@ -45,10 +53,9 @@ def fetch_repos(base_url: str, project_key: str, token: str | None) -> list[dict
                 data = json.loads(response.read().decode())
         except urllib.error.HTTPError as e:
             body = e.read().decode(errors="replace")
-            with print_lock:
-                print(f"Error fetching repos: HTTP {e.code} {e.reason}", file=sys.stderr)
-                if body:
-                    print(body, file=sys.stderr)
+            print(f"Error fetching repos: HTTP {e.code} {e.reason}", file=sys.stderr)
+            if body:
+                print(body, file=sys.stderr)
             sys.exit(1)
 
         repos.extend(data.get("values", []))
@@ -74,20 +81,18 @@ def sync_repo(url: str, dest: str) -> bool:
     """Clone the repo if dest doesn't exist, otherwise pull. Returns True on success."""
     slug = os.path.basename(dest)
     env = os.environ.copy()
-    # Prevent Git from ever prompting for credentials on the terminal.
-    # This ensures that failed auth (e.g. missing SSH key) fails fast instead of hanging.
     env["GIT_TERMINAL_PROMPT"] = "0"
     
     if os.path.isdir(os.path.join(dest, ".git")):
         with print_lock:
-            print(f"  pulling  {slug} ({dest})")
+            print(f"  pulling  {slug}")
         result = subprocess.run(
             ["git", "-C", dest, "pull", "--ff-only"],
             capture_output=True, text=True, env=env
         )
     else:
         with print_lock:
-            print(f"  cloning  {url} -> {dest}")
+            print(f"  cloning  {slug}")
         result = subprocess.run(
             ["git", "clone", url, dest],
             capture_output=True, text=True, env=env
@@ -98,7 +103,6 @@ def sync_repo(url: str, dest: str) -> bool:
             print(f"  FAILED: {slug}: {result.stderr.strip()}", file=sys.stderr)
             return False
         if result.stdout.strip():
-            # Filter out "Already up to date" to reduce noise in parallel mode
             out = result.stdout.strip()
             if out != "Already up to date.":
                 print(f"  {slug}: {out}")
@@ -114,15 +118,12 @@ def get_latest_tag(dest: str) -> str | None:
     if result.returncode != 0:
         return None
 
-    # Pattern for simple semver: v1.2.3 or 1.2.3
     pattern = re.compile(r'^v?(\d+)\.(\d+)\.(\d+)$')
-    
     found_tags = []
     for line in result.stdout.splitlines():
         tag = line.strip()
         match = pattern.match(tag)
         if match:
-            # Store (major, minor, patch) as integers for proper numeric sorting
             ver_tuple = tuple(map(int, match.groups()))
             found_tags.append((ver_tuple, tag))
     
@@ -136,40 +137,23 @@ def get_latest_tag(dest: str) -> str | None:
 def checkout_tag(dest: str, tag: str) -> bool:
     """Checkout a specific tag. Returns True on success."""
     slug = os.path.basename(dest)
-    with print_lock:
-        print(f"  checking out {tag} in {slug}")
+    print(f"  {slug}: checking out {tag}")
     result = subprocess.run(
         ["git", "-C", dest, "checkout", tag, "--quiet"],
         capture_output=True, text=True
     )
     if result.returncode != 0:
-        with print_lock:
-            print(f"  FAILED: {slug}: checkout {tag}: {result.stderr.strip()}", file=sys.stderr)
+        print(f"  FAILED: {slug}: checkout {tag}: {result.stderr.strip()}", file=sys.stderr)
         return False
     return True
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Clone, pull, or checkout tags for repos in a Bitbucket project.")
-    parser.add_argument("project_url", help="Bitbucket project URL, e.g. https://bitbucket.example.com/projects/MY_PROJECT")
-    parser.add_argument("--target-dir", default=".", help="Directory to clone repos into (default: current directory)")
-    parser.add_argument("--token", default=None, help="Bitbucket personal access token (or set BITBUCKET_TOKEN env var)")
-    parser.add_argument("--ssh", action="store_true", help="Prefer SSH clone URLs over HTTPS")
-    parser.add_argument("--jobs", "-j", type=int, default=4, help="Number of parallel sync jobs (default: 4)")
-    parser.add_argument("--include-archived", action="store_true", help="Include repositories that are archived (skipped by default)")
-    parser.add_argument("--mode", choices=["sync", "checkout-tags"], default="sync",
-                        help="Operation mode: 'sync' (clone/pull) or 'checkout-tags' (checkout latest semver tag). Default: sync")
-    args = parser.parse_args()
-
+def cmd_sync(args):
     token = args.token or os.environ.get("BITBUCKET_TOKEN")
-
-    # Parse base URL and project key from the project URL.
-    # Expected format: https://<host>/projects/<PROJECT_KEY>
     url = args.project_url.rstrip("/")
     parts = url.split("/projects/")
     if len(parts) != 2 or not parts[1]:
         print(f"Invalid project URL: {args.project_url!r}", file=sys.stderr)
-        print("Expected format: https://<host>/projects/<PROJECT_KEY>", file=sys.stderr)
         sys.exit(1)
 
     base_url = parts[0]
@@ -178,7 +162,6 @@ def main():
     print(f"Fetching repositories for project {project_key!r} from {base_url} ...")
     all_repos = fetch_repos(base_url, project_key, token)
     
-    # Filter archived repos unless requested otherwise
     if not args.include_archived:
         repos = [r for r in all_repos if not r.get("archived")]
         archived_count = len(all_repos) - len(repos)
@@ -195,36 +178,20 @@ def main():
 
     def task(repo):
         slug = repo["slug"]
+        url = clone_url(repo, prefer_ssh=args.ssh)
+        if not url:
+            with print_lock:
+                print(f"  SKIP {slug}: no clone URL found", file=sys.stderr)
+            return None
         dest = os.path.join(target_dir, slug)
-
-        if args.mode == "sync":
-            url = clone_url(repo, prefer_ssh=args.ssh)
-            if not url:
-                with print_lock:
-                    print(f"  SKIP {slug}: no clone URL found", file=sys.stderr)
-                return None
-            if not sync_repo(url, dest):
-                return slug
-        elif args.mode == "checkout-tags":
-            if not os.path.isdir(os.path.join(dest, ".git")):
-                with print_lock:
-                    print(f"  SKIP {slug}: directory not found or not a git repo")
-                return None
-            tag = get_latest_tag(dest)
-            if not tag:
-                with print_lock:
-                    print(f"  {slug}: no semver tags found")
-                return None
-            if not checkout_tag(dest, tag):
-                return slug
+        if not sync_repo(url, dest):
+            return slug
         return None
 
-    failed = []
     with ThreadPoolExecutor(max_workers=args.jobs) as executor:
         results = list(executor.map(task, repos))
         failed = [r for r in results if r is not None]
 
-    # Identify local repos that are no longer in the project (or filtered out)
     active_slugs = {repo["slug"] for repo in repos}
     obsolete = []
     if os.path.isdir(target_dir):
@@ -234,18 +201,69 @@ def main():
                 if entry not in active_slugs:
                     obsolete.append(entry)
 
-    print()
     if obsolete:
-        print(f"No longer in project ({len(obsolete)}):")
+        print(f"\nNo longer in project ({len(obsolete)}):")
         for slug in sorted(obsolete):
             print(f"  {slug}")
-        print()
 
+    if failed:
+        print(f"\nFailed ({len(failed)}): {', '.join(failed)}", file=sys.stderr)
+        sys.exit(1)
+    else:
+        print("\nAll repositories synced successfully.")
+
+
+def cmd_checkout_tags(args):
+    target_dir = os.path.abspath(args.target_dir)
+    if not os.path.isdir(target_dir):
+        print(f"Error: target directory {target_dir!r} does not exist.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Scanning {target_dir} for repositories and checking out latest semver tags...")
+    
+    count = 0
+    failed = []
+    for entry in sorted(os.listdir(target_dir)):
+        dest = os.path.join(target_dir, entry)
+        if not os.path.isdir(os.path.join(dest, ".git")):
+            continue
+        
+        count += 1
+        tag = get_latest_tag(dest)
+        if not tag:
+            print(f"  {entry}: no semver tags found")
+            continue
+        
+        if not checkout_tag(dest, tag):
+            failed.append(entry)
+
+    print(f"\nProcessed {count} repositories.")
     if failed:
         print(f"Failed ({len(failed)}): {', '.join(failed)}", file=sys.stderr)
         sys.exit(1)
-    else:
-        print(f"All repositories processed successfully in {args.mode} mode.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Manage multiple repos in a Bitbucket project.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # Sync command
+    parser_sync = subparsers.add_parser("sync", help="Clone or pull all repos in a project.")
+    parser_sync.add_argument("project_url", help="Bitbucket project URL")
+    parser_sync.add_argument("--target-dir", default=".", help="Directory to clone repos into")
+    parser_sync.add_argument("--token", default=None, help="Bitbucket access token")
+    parser_sync.add_argument("--ssh", action="store_true", help="Prefer SSH URLs")
+    parser_sync.add_argument("--jobs", "-j", type=int, default=4, help="Parallel sync jobs")
+    parser_sync.add_argument("--include-archived", action="store_true", help="Include archived repos")
+    parser_sync.set_defaults(func=cmd_sync)
+
+    # Checkout-tags command
+    parser_tags = subparsers.add_parser("checkout-tags", help="Locally checkout latest semver tags.")
+    parser_tags.add_argument("--target-dir", default=".", help="Directory containing the repos")
+    parser_tags.set_defaults(func=cmd_checkout_tags)
+
+    args = parser.parse_args()
+    args.func(args)
 
 
 if __name__ == "__main__":
