@@ -110,8 +110,10 @@ func readAndMerge(path string, result map[string]string) error {
 	}
 
 	// Pre-process to handle Maven placeholders like @project.name@ which are
-	// invalid in YAML if not quoted. We wrap them in double quotes.
-	data = mavenPlaceholderRe.ReplaceAll(data, []byte(`"$0"`))
+	// invalid YAML if unquoted. Strip the @ delimiters; the inner content
+	// (e.g. "project.name") is a valid YAML bare scalar and is harmless
+	// whether the value was already quoted or not.
+	data = mavenPlaceholderRe.ReplaceAll(data, []byte(`$1`))
 
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	for {

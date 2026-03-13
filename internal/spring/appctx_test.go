@@ -297,3 +297,43 @@ func TestMatchTopics(t *testing.T) {
 		})
 	}
 }
+
+func TestReadAndMergeMavenPlaceholders(t *testing.T) {
+	content := []byte(`
+app:
+  name: @project.name@
+  version: "@project.version@"
+  description: This is @project.description@
+  already_quoted: "@already.quoted@"
+`)
+	f, err := os.CreateTemp(t.TempDir(), "application*.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	result := make(map[string]string)
+	if err := readAndMerge(f.Name(), result); err != nil {
+		t.Fatalf("readAndMerge failed: %v", err)
+	}
+
+	tests := []struct {
+		key  string
+		want string
+	}{
+		{"app.name", "project.name"},
+		{"app.version", "project.version"},
+		{"app.description", "This is project.description"},
+		{"app.already_quoted", "already.quoted"},
+	}
+
+	for _, tt := range tests {
+		if got := result[tt.key]; got != tt.want {
+			t.Errorf("result[%q] = %q, want %q", tt.key, got, tt.want)
+		}
+	}
+}
