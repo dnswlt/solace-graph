@@ -130,8 +130,19 @@ func flattenValue(v any, prefix string, result map[string]string) {
 			flattenValue(child, key, result)
 		}
 	case []any:
-		for i, child := range val {
-			flattenValue(child, fmt.Sprintf("%s[%d]", prefix, i), result)
+		// Use the next unoccupied index rather than the sequential one, so that
+		// list items from multiple files (e.g. spring.config.import lists) are
+		// all preserved instead of being silently dropped by first-wins.
+		idx := 0
+		for _, child := range val {
+			for {
+				if _, exists := result[fmt.Sprintf("%s[%d]", prefix, idx)]; !exists {
+					break
+				}
+				idx++
+			}
+			flattenValue(child, fmt.Sprintf("%s[%d]", prefix, idx), result)
+			idx++
 		}
 	case nil:
 		// skip null values
