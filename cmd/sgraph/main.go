@@ -1,20 +1,5 @@
-// sgraph walks a directory tree and extracts Spring Cloud Stream bindings
-// from files whose full paths match any of the given regular expressions,
-// then outputs the result as JSON.
-//
-// Usage:
-//
-//	sgraph <command> [arguments]
-//
-// Commands:
-//
-//	collect: output the bindings found in each file, mapped to an application name
-//	graph:   output the dependency graph between applications from collected bindings
-//
-// Examples:
-//
-//	sgraph collect /repos '.*/src/main/resources/application.*\.yml' > bindings.json
-//	sgraph graph -input bindings.json
+// sgraph extracts Spring Cloud Stream bindings from application files
+// and builds a dependency graph between applications.
 package main
 
 import (
@@ -52,6 +37,6 @@ func main() {
 func printUsage() {
 	fmt.Fprintf(os.Stderr, "Usage: %s <command> [arguments]\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "\nCommands:\n")
-	fmt.Fprintf(os.Stderr, "  collect <root> <pattern> [<pattern>...]   Extract bindings and map to applications\n")
-	fmt.Fprintf(os.Stderr, "  graph -input <file>                       Build dependency graph from collected bindings\n")
+	fmt.Fprintf(os.Stderr, "  collect [-exclude-profile <regex>]... <root> [<root>...]   Extract bindings and map to applications\n")
+	fmt.Fprintf(os.Stderr, "  graph [-html <report.html>] <file> [<file>...]              Build dependency graph from collected bindings\n")
 }
