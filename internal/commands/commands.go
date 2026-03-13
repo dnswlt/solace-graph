@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -114,12 +115,14 @@ func Graph(out io.Writer, args []string) error {
 	nodes := graph.Build(allApps)
 
 	if *htmlPath != "" {
-		f, err := os.Create(*htmlPath)
-		if err != nil {
-			return fmt.Errorf("could not create HTML report file: %v", err)
+		var buf bytes.Buffer
+		if err := report.Generate(&buf, nodes); err != nil {
+			return fmt.Errorf("could not generate HTML report: %v", err)
 		}
-		defer f.Close()
-		return report.Generate(f, nodes)
+		if err := os.WriteFile(*htmlPath, buf.Bytes(), 0644); err != nil {
+			return fmt.Errorf("could not write HTML report file: %v", err)
+		}
+		return nil
 	}
 
 	enc := json.NewEncoder(out)
