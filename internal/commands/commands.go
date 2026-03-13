@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -18,24 +17,15 @@ import (
 	"github.com/dnswlt/solace-graph/internal/spring"
 )
 
-// Collect extracts bindings from files matching patterns under root and writes them as JSON to out.
+// Collect extracts bindings from all Spring application contexts found under the given
+// roots and writes them as JSON to out.
 // It merges multiple files belonging to the same application (e.g. same pom.xml or folder).
 func Collect(out io.Writer, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: collect <root> <pattern> [<pattern>...]")
+	if len(args) < 1 {
+		return fmt.Errorf("usage: collect <root> [<root>...]")
 	}
 
-	root := args[0]
-	patterns := make([]*regexp.Regexp, len(args)-1)
-	for i, s := range args[1:] {
-		re, err := regexp.Compile(s)
-		if err != nil {
-			return fmt.Errorf("invalid pattern %q: %v", s, err)
-		}
-		patterns[i] = re
-	}
-
-	result, err := spring.FindStreamBindings(root, patterns)
+	result, err := spring.FindStreamBindings(args)
 	if err != nil {
 		return fmt.Errorf("FindStreamBindings: %v", err)
 	}

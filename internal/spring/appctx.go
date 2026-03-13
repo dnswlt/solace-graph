@@ -129,8 +129,7 @@ func processImports(result map[string]string, fileIndex map[string]string) error
 		var toImport []string
 		for k, v := range result {
 			if importKeyPattern.MatchString(k) {
-				parts := strings.Split(v, ",")
-				for _, p := range parts {
+				for p := range strings.SplitSeq(v, ",") {
 					p = strings.TrimSpace(p)
 					p = strings.TrimPrefix(p, "optional:")
 					p = strings.TrimPrefix(p, "classpath:")
@@ -236,27 +235,29 @@ func resolvePlaceholders(result map[string]string) {
 	}
 }
 
-// findRepoRoots returns the paths of all git repositories under root, sorted
-// longest-first so that nested repos match before their parent.
-func findRepoRoots(root string) ([]string, error) {
-	var roots []string
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+// findRepoRoots returns the paths of all git repositories under the given roots,
+// sorted longest-first so that nested repos match before their parent.
+func findRepoRoots(roots []string) ([]string, error) {
+	var repoRoots []string
+	for _, root := range roots {
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() && d.Name() == ".git" {
+				repoRoots = append(repoRoots, filepath.Dir(path))
+				return fs.SkipDir
+			}
+			return nil
+		})
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if d.IsDir() && d.Name() == ".git" {
-			roots = append(roots, filepath.Dir(path))
-			return fs.SkipDir
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
-	sort.Slice(roots, func(i, j int) bool {
-		return len(roots[i]) > len(roots[j])
+	sort.Slice(repoRoots, func(i, j int) bool {
+		return len(repoRoots[i]) > len(repoRoots[j])
 	})
-	return roots, nil
+	return repoRoots, nil
 }
 
 // repoRootFor returns the deepest repo root that is an ancestor of fpath,
@@ -270,12 +271,13 @@ func repoRootFor(fpath string, repoRoots []string) string {
 	return ""
 }
 
-// FindStreamBindings walks root recursively and finds all Spring application contexts.
-// A context is usually a 'src/main/resources' directory. For each context, it reads
-// all application*.yml files together, allowing for placeholder resolution across files.
+// FindStreamBindings walks each of the given roots recursively and finds all Spring
+// application contexts. A context is usually a 'src/main/resources' directory.
+// For each context, it reads all application*.yml files together, allowing for
+// placeholder resolution across files.
 // It returns a map from context directory path to its non-empty list of stream bindings.
-func FindStreamBindings(root string, patterns []*regexp.Regexp) (map[string][]StreamBinding, error) {
-	repoRoots, err := findRepoRoots(root)
+func FindStreamBindings(roots []string) (map[string][]StreamBinding, error) {
+	repoRoots, err := findRepoRoots(roots)
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +288,7 @@ func FindStreamBindings(root string, patterns []*regexp.Regexp) (map[string][]St
 	fileIndex := make(map[string]map[string]string)
 	contextDirs := make(map[string]bool)
 
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	walkFn := func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -303,19 +305,8 @@ func FindStreamBindings(root string, patterns []*regexp.Regexp) (map[string][]St
 			fileIndex[repo][filepath.Base(path)] = path
 		}
 
-		// Only care about Spring configuration files matching patterns.
+		// Only care about Spring configuration files.
 		if !applicationYMLPattern.MatchString(d.Name()) {
-			return nil
-		}
-
-		matched := false
-		for _, re := range patterns {
-			if re.MatchString(path) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
 			return nil
 		}
 
@@ -327,9 +318,12 @@ func FindStreamBindings(root string, patterns []*regexp.Regexp) (map[string][]St
 		}
 		contextDirs[ctxDir] = true
 		return nil
-	})
-	if err != nil {
-		return nil, err
+	}
+
+	for _, root := range roots {
+		if err := filepath.WalkDir(root, walkFn); err != nil {
+			return nil, err
+		}
 	}
 
 	// Process each identified context.
