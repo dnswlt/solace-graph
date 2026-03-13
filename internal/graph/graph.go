@@ -87,9 +87,10 @@ func Build(apps []Application) []Node {
 				levels:  spring.TopicLevels(b.Destination),
 			}
 			pa.bindings = append(pa.bindings, pb)
-			if b.Direction == spring.BindingIn {
+			switch b.Direction {
+			case spring.BindingIn:
 				pa.in = append(pa.in, pb)
-			} else if b.Direction == spring.BindingOut {
+			case spring.BindingOut:
 				pa.out = append(pa.out, pb)
 			}
 		}
@@ -159,7 +160,7 @@ func Build(apps []Application) []Node {
 }
 
 func isSolace(b spring.StreamBinding) bool {
-	if b.Binder == "solace" {
+	if strings.Contains(b.Binder, "solace") {
 		return true
 	}
 	if b.Binder != "" {
