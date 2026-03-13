@@ -111,6 +111,7 @@ func excludedProfile(filename string, excludeProfiles []*regexp.Regexp) bool {
 }
 
 func readAndMerge(path string, result map[string]string) error {
+	debugf("  reading %s", path)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("spring properties: cannot read %s: %w", path, err)
@@ -273,6 +274,38 @@ func resolvePlaceholders(result map[string]string) {
 		sort.Strings(unresolved)
 		for _, k := range unresolved {
 			debugf("unresolved placeholder: %s = %s", k, result[k])
+			// For each unresolved ${key}, search for similar keys to help diagnose mismatches.
+			for _, ph := range placeholderRe.FindAllString(result[k], -1) {
+				phKey := ph[2 : len(ph)-1]
+				if idx := strings.IndexByte(phKey, ':'); idx != -1 {
+					phKey = phKey[:idx] // strip default value
+				}
+				// Use the last segment with more than 3 characters as the search term.
+				searchTerm := ""
+				for seg := range strings.SplitSeq(phKey, ".") {
+					if len(seg) > 3 {
+						searchTerm = normalizeKey(seg)
+					}
+				}
+				if searchTerm == "" {
+					continue
+				}
+				var candidates []string
+				for rk := range result {
+					if strings.Contains(normalizeKey(rk), searchTerm) {
+						candidates = append(candidates, rk)
+					}
+				}
+				if len(candidates) == 0 {
+					debugf("  %s: key not found in any loaded property", ph)
+				} else {
+					sort.Strings(candidates)
+					if len(candidates) > 5 {
+						candidates = candidates[:5]
+					}
+					debugf("  %s: key not found, similar loaded properties: %v", ph, candidates)
+				}
+			}
 		}
 	}
 }
