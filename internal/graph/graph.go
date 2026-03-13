@@ -163,9 +163,6 @@ func isSolace(b spring.StreamBinding) bool {
 	if strings.Contains(b.Binder, "solace") {
 		return true
 	}
-	if b.Binder != "" {
-		return false
-	}
 	// Heuristic: Solace topics typically use '/', while Kafka topics use '.'.
-	return strings.Contains(b.Destination, "/") && !strings.Contains(b.Destination, ".")
+	return strings.Contains(b.Destination, "/")
 }
