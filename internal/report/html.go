@@ -415,9 +415,8 @@ const htmlTemplate = `
         const navItems = document.querySelectorAll('#nav-list li');
         const appCards = document.querySelectorAll('.app-card');
 
-        filterInput.addEventListener('input', (e) => {
-            const query = e.target.value.toLowerCase();
-            
+        function updateFilter(query) {
+            query = query.toLowerCase();
             navItems.forEach(item => {
                 const name = item.getAttribute('data-name').toLowerCase();
                 item.style.display = name.includes(query) ? '' : 'none';
@@ -427,6 +426,21 @@ const htmlTemplate = `
                 const name = card.getAttribute('data-name').toLowerCase();
                 card.style.display = name.includes(query) ? '' : 'none';
             });
+        }
+
+        filterInput.addEventListener('input', (e) => {
+            updateFilter(e.target.value);
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                filterInput.value = '';
+                updateFilter('');
+                filterInput.blur();
+            } else if (e.key === '/' && document.activeElement !== filterInput) {
+                e.preventDefault();
+                filterInput.focus();
+            }
         });
     </script>
 </body>
