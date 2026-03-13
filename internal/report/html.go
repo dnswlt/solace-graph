@@ -50,6 +50,26 @@ const htmlTemplate = `
         h2 { font-size: 1.25rem; margin-top: 1.5rem; margin-bottom: 0.75rem; }
         h3 { font-size: 0.9rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.75rem; }
 
+        .filter-box {
+            margin-bottom: 1rem;
+        }
+
+        #app-filter {
+            width: 100%;
+            padding: 0.5rem;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-size: 0.9rem;
+            box-sizing: border-box;
+            outline: none;
+            transition: border-color 0.2s;
+            color: var(--text-main);
+        }
+
+        #app-filter:focus {
+            border-color: var(--primary-color);
+        }
+
         nav {
             background: var(--bg-card);
             padding: 1rem;
@@ -65,6 +85,8 @@ const htmlTemplate = `
             display: flex;
             flex-direction: column;
             gap: 0.25rem;
+            max-height: 400px;
+            overflow-y: auto;
         }
 
         nav a {
@@ -73,6 +95,7 @@ const htmlTemplate = `
             font-size: 0.9rem;
             padding: 0.125rem 0.25rem;
             border-radius: 4px;
+            display: block;
         }
 
         nav a:hover { background: var(--code-bg); }
@@ -256,18 +279,23 @@ const htmlTemplate = `
         <header>
             <h1>Solace Dependency Graph</h1>
         </header>
+
+        <div class="filter-box">
+            <input type="text" id="app-filter" placeholder="Filter by application name..." autocomplete="off">
+        </div>
         
         <nav>
             <h3>Applications</h3>
-            <ul>
+            <ul id="nav-list">
             {{range .}}
-                <li><a href="#{{.App.Name}}">{{.App.Name}}</a></li>
+                <li data-name="{{.App.Name}}"><a href="#{{.App.Name}}">{{.App.Name}}</a></li>
             {{end}}
             </ul>
         </nav>
 
+        <div id="apps-container">
         {{range .}}
-        <div class="app-card" id="{{.App.Name}}">
+        <div class="app-card" id="{{.App.Name}}" data-name="{{.App.Name}}">
             <div class="app-header">
                 <h2>{{.App.Name}}{{if .App.Version}} <span style="font-weight: normal; color: var(--text-muted); font-size: 1rem;">v{{.App.Version}}</span>{{end}}</h2>
                 <div class="app-meta">
@@ -379,7 +407,28 @@ const htmlTemplate = `
             </details>
         </div>
         {{end}}
+        </div>
     </div>
+
+    <script>
+        const filterInput = document.getElementById('app-filter');
+        const navItems = document.querySelectorAll('#nav-list li');
+        const appCards = document.querySelectorAll('.app-card');
+
+        filterInput.addEventListener('input', (e) => {
+            const query = e.target.value.toLowerCase();
+            
+            navItems.forEach(item => {
+                const name = item.getAttribute('data-name').toLowerCase();
+                item.style.display = name.includes(query) ? '' : 'none';
+            });
+
+            appCards.forEach(card => {
+                const name = card.getAttribute('data-name').toLowerCase();
+                card.style.display = name.includes(query) ? '' : 'none';
+            });
+        });
+    </script>
 </body>
 </html>
 `
