@@ -60,8 +60,9 @@ func ReadApplicationProperties(path string, fileIndex map[string]string, exclude
 		}
 		for _, entry := range entries {
 			if !entry.IsDir() && applicationYMLPattern.MatchString(entry.Name()) && !excludedProfile(entry.Name(), excludeProfiles) {
-				if err := readAndMerge(filepath.Join(path, entry.Name()), result); err != nil {
-					return nil, err
+				err := readAndMerge(filepath.Join(path, entry.Name()), result)
+				if err != nil {
+					slog.Warn("spring: skipping file", "file", entry.Name(), "err", err)
 				}
 			}
 		}
