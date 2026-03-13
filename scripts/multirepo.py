@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-multirepo.py - Clone or pull all repositories in a Bitbucket Data Center project.
+multirepo.py - Clone, pull, or checkout latest tags for all repositories in a Bitbucket Data Center project.
 
 Usage:
-    python multirepo.py https://bitbucket.example.com/projects/MY_PROJECT [--target-dir ./repos] [--token TOKEN] [--ssh] [--jobs 4]
+    python multirepo.py https://bitbucket.example.com/projects/MY_PROJECT [--target-dir ./repos] [--token TOKEN] [--ssh] [--jobs 4] [--mode {sync,checkout-tags}]
 
 Authentication:
     Pass a personal access token via --token or the BITBUCKET_TOKEN environment variable.
@@ -18,6 +18,7 @@ import urllib.request
 import urllib.parse
 import json
 import threading
+import re
 from concurrent.futures import ThreadPoolExecutor
 
 # Lock to prevent interleaved output from multiple threads
@@ -104,19 +105,66 @@ def sync_repo(url: str, dest: str) -> bool:
     return True
 
 
+def get_latest_tag(dest: str) -> str | None:
+    """Find the latest semver-compliant tag in the repository."""
+    result = subprocess.run(
+        ["git", "-C", dest, "tag", "-l"],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        return None
+
+    # Pattern for simple semver: v1.2.3 or 1.2.3
+    pattern = re.compile(r'^v?(\d+)\.(\d+)\.(\d+)$')
+    
+    found_tags = []
+    for line in result.stdout.splitlines():
+        tag = line.strip()
+        match = pattern.match(tag)
+        if match:
+            # Store (major, minor, patch) as integers for proper numeric sorting
+            ver_tuple = tuple(map(int, match.groups()))
+            found_tags.append((ver_tuple, tag))
+    
+    if not found_tags:
+        return None
+    
+    found_tags.sort()
+    return found_tags[-1][1]
+
+
+def checkout_tag(dest: str, tag: str) -> bool:
+    """Checkout a specific tag. Returns True on success."""
+    slug = os.path.basename(dest)
+    with print_lock:
+        print(f"  checking out {tag} in {slug}")
+    result = subprocess.run(
+        ["git", "-C", dest, "checkout", tag, "--quiet"],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        with print_lock:
+            print(f"  FAILED: {slug}: checkout {tag}: {result.stderr.strip()}", file=sys.stderr)
+        return False
+    return True
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Clone or pull all repos in a Bitbucket Data Center project.")
+    parser = argparse.ArgumentParser(description="Clone, pull, or checkout tags for repos in a Bitbucket project.")
     parser.add_argument("project_url", help="Bitbucket project URL, e.g. https://bitbucket.example.com/projects/MY_PROJECT")
     parser.add_argument("--target-dir", default=".", help="Directory to clone repos into (default: current directory)")
     parser.add_argument("--token", default=None, help="Bitbucket personal access token (or set BITBUCKET_TOKEN env var)")
     parser.add_argument("--ssh", action="store_true", help="Prefer SSH clone URLs over HTTPS")
     parser.add_argument("--jobs", "-j", type=int, default=4, help="Number of parallel sync jobs (default: 4)")
     parser.add_argument("--include-archived", action="store_true", help="Include repositories that are archived (skipped by default)")
+    parser.add_argument("--mode", choices=["sync", "checkout-tags"], default="sync",
+                        help="Operation mode: 'sync' (clone/pull) or 'checkout-tags' (checkout latest semver tag). Default: sync")
     args = parser.parse_args()
 
     token = args.token or os.environ.get("BITBUCKET_TOKEN")
 
-    # ... (URL parsing logic remains the same) ...
+    # Parse base URL and project key from the project URL.
+    # Expected format: https://<host>/projects/<PROJECT_KEY>
     url = args.project_url.rstrip("/")
     parts = url.split("/projects/")
     if len(parts) != 2 or not parts[1]:
@@ -147,14 +195,28 @@ def main():
 
     def task(repo):
         slug = repo["slug"]
-        url = clone_url(repo, prefer_ssh=args.ssh)
-        if not url:
-            with print_lock:
-                print(f"  SKIP {slug}: no clone URL found", file=sys.stderr)
-            return None
         dest = os.path.join(target_dir, slug)
-        if not sync_repo(url, dest):
-            return slug
+
+        if args.mode == "sync":
+            url = clone_url(repo, prefer_ssh=args.ssh)
+            if not url:
+                with print_lock:
+                    print(f"  SKIP {slug}: no clone URL found", file=sys.stderr)
+                return None
+            if not sync_repo(url, dest):
+                return slug
+        elif args.mode == "checkout-tags":
+            if not os.path.isdir(os.path.join(dest, ".git")):
+                with print_lock:
+                    print(f"  SKIP {slug}: directory not found or not a git repo")
+                return None
+            tag = get_latest_tag(dest)
+            if not tag:
+                with print_lock:
+                    print(f"  {slug}: no semver tags found")
+                return None
+            if not checkout_tag(dest, tag):
+                return slug
         return None
 
     failed = []
@@ -183,7 +245,7 @@ def main():
         print(f"Failed ({len(failed)}): {', '.join(failed)}", file=sys.stderr)
         sys.exit(1)
     else:
-        print("All repositories synced successfully.")
+        print(f"All repositories processed successfully in {args.mode} mode.")
 
 
 if __name__ == "__main__":
