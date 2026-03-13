@@ -3,21 +3,32 @@
 package main
 
 import (
+	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 
 	"github.com/dnswlt/solace-graph/internal/commands"
 )
 
 func main() {
-	if len(os.Args) < 2 {
+	verbose := flag.Bool("v", false, "enable debug logging")
+	flag.Usage = printUsage
+	flag.Parse()
+
+	level := slog.LevelInfo
+	if *verbose {
+		level = slog.LevelDebug
+	}
+	slog.SetDefault(slog.New(&cliHandler{w: os.Stderr, level: level}))
+
+	if flag.NArg() < 1 {
 		printUsage()
 		os.Exit(1)
 	}
 
-	cmd := os.Args[1]
-	args := os.Args[2:]
+	cmd := flag.Arg(0)
+	args := flag.Args()[1:]
 
 	var err error
 	switch cmd {
@@ -26,16 +37,20 @@ func main() {
 	case "graph":
 		err = commands.Graph(os.Stdout, args)
 	default:
-		log.Fatalf("unknown command %q", cmd)
+		slog.Error("unknown command", "cmd", cmd)
+		os.Exit(1)
 	}
 
 	if err != nil {
-		log.Fatal(err)
+		slog.Error(err.Error())
+		os.Exit(1)
 	}
 }
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, "Usage: %s <command> [arguments]\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "Usage: %s [-v] <command> [arguments]\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "\nFlags:\n")
+	fmt.Fprintf(os.Stderr, "  -v   enable debug logging\n")
 	fmt.Fprintf(os.Stderr, "\nCommands:\n")
 	fmt.Fprintf(os.Stderr, "  collect [-exclude-profile <regex>]... <root> [<root>...]   Extract bindings and map to applications\n")
 	fmt.Fprintf(os.Stderr, "  graph [-html <report.html>] <file> [<file>...]              Build dependency graph from collected bindings\n")

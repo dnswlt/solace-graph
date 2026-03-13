@@ -14,7 +14,7 @@ func TestReadApplicationProperties(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	dir := filepath.Dir(file)
 
-	props, err := ReadApplicationProperties([]string{dir}, nil, nil)
+	props, err := ReadApplicationProperties(dir, nil, nil)
 	if err != nil {
 		t.Fatalf("ReadApplicationProperties: %v", err)
 	}
@@ -58,7 +58,7 @@ spring:
 	}
 	f.Close()
 
-	props, err := ReadApplicationProperties([]string{f.Name()}, nil, nil)
+	props, err := ReadApplicationProperties(f.Name(), nil, nil)
 	if err != nil {
 		t.Fatalf("ReadApplicationProperties: %v", err)
 	}
@@ -123,7 +123,7 @@ application:
 		"application-imported.yml": importedYml,
 	}
 
-	props, err := ReadApplicationProperties([]string{appYml}, fileIndex, nil)
+	props, err := ReadApplicationProperties(appYml, fileIndex, nil)
 	if err != nil {
 		t.Fatalf("ReadApplicationProperties: %v", err)
 	}

@@ -2,11 +2,12 @@ package spring
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
-	"log"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -41,35 +42,32 @@ type StreamBinding struct {
 	Binder      string           // binder name, e.g. "kafka" or "solace"
 }
 
-// ReadApplicationProperties takes a list of paths, which can be directories or files,
-// and reads all application[-*].yml files in all given directories as well as all given files,
-// as Spring application properties YAML files. Profile-specific files whose suffix matches
-// any of the excludeProfiles regexes are skipped.
+// ReadApplicationProperties reads a directory or file as Spring application properties YAML.
+// For directories, all application[-*].yml files are read; profile-specific files whose
+// suffix matches any of the excludeProfiles regexes are skipped.
 //
 // It returns a mapping from flattened keys ("my.funny.property") to their values.
-func ReadApplicationProperties(paths []string, fileIndex map[string]string, excludeProfiles []*regexp.Regexp) (map[string]string, error) {
+func ReadApplicationProperties(path string, fileIndex map[string]string, excludeProfiles []*regexp.Regexp) (map[string]string, error) {
 	result := make(map[string]string)
-	for _, path := range paths {
-		info, err := os.Stat(path)
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("spring properties: cannot stat %s: %w", path, err)
+	}
+	if info.IsDir() {
+		entries, err := os.ReadDir(path)
 		if err != nil {
-			return nil, fmt.Errorf("spring properties: cannot stat %s: %w", path, err)
+			return nil, fmt.Errorf("spring properties: cannot read directory %s: %w", path, err)
 		}
-		if info.IsDir() {
-			entries, err := os.ReadDir(path)
-			if err != nil {
-				return nil, fmt.Errorf("spring properties: cannot read directory %s: %w", path, err)
-			}
-			for _, entry := range entries {
-				if !entry.IsDir() && applicationYMLPattern.MatchString(entry.Name()) && !excludedProfile(entry.Name(), excludeProfiles) {
-					if err := readAndMerge(filepath.Join(path, entry.Name()), result); err != nil {
-						return nil, err
-					}
+		for _, entry := range entries {
+			if !entry.IsDir() && applicationYMLPattern.MatchString(entry.Name()) && !excludedProfile(entry.Name(), excludeProfiles) {
+				if err := readAndMerge(filepath.Join(path, entry.Name()), result); err != nil {
+					return nil, err
 				}
 			}
-		} else {
-			if err := readAndMerge(path, result); err != nil {
-				return nil, err
-			}
+		}
+	} else {
+		if err := readAndMerge(path, result); err != nil {
+			return nil, err
 		}
 	}
 
@@ -191,10 +189,10 @@ func processImports(result map[string]string, fileIndex map[string]string) error
 			basename := filepath.Base(imp)
 			if path, ok := fileIndex[basename]; ok {
 				if err := readAndMerge(path, result); err != nil {
-					log.Printf("spring properties: skipping import %q: %v", imp, err)
+					slog.Warn("spring: skipping import", "import", imp, "err", err)
 				}
 			} else {
-				log.Printf("spring properties: import %q not found in file index", imp)
+				slog.Warn("spring: import not found in file index", "import", imp)
 			}
 		}
 	}
@@ -311,6 +309,28 @@ func repoRootFor(fpath string, repoRoots []string) string {
 	return ""
 }
 
+func logUnresolvedPlaceholders(ctxDir string, bindings []StreamBinding) {
+	if !slog.Default().Enabled(context.TODO(), slog.LevelDebug) {
+		return
+	}
+	unresolved := make(map[string]bool)
+	for _, b := range bindings {
+		for _, m := range placeholderRe.FindAllString(b.Destination, -1) {
+			if !strings.Contains(m, "replyTopicWithWildcards") {
+				unresolved[m] = true
+			}
+		}
+	}
+	if len(unresolved) > 0 {
+		vars := make([]string, 0, len(unresolved))
+		for v := range unresolved {
+			vars = append(vars, v)
+		}
+		sort.Strings(vars)
+		slog.Debug("spring: unresolved placeholders in bindings", "dir", ctxDir, "vars", vars)
+	}
+}
+
 // FindStreamBindings walks each of the given roots recursively and finds all Spring
 // application contexts. A context is usually a 'src/main/resources' directory.
 // For each context, it reads all application*.yml files together, allowing for
@@ -375,24 +395,16 @@ func FindStreamBindings(roots []string, excludeProfiles []*regexp.Regexp) (map[s
 	sort.Strings(sortedContexts)
 
 	for _, ctxDir := range sortedContexts {
-		// Read all application*.yml files in this context.
-		// We include both the context directory itself and its 'config' subdirectory if it exists.
-		// Spring processes them such that config/ overrides the root.
-		// In our implementation, we must put the overrides FIRST.
-		var configPaths []string
-		configDir := filepath.Join(ctxDir, "config")
-		if info, err := os.Stat(configDir); err == nil && info.IsDir() {
-			configPaths = append(configPaths, configDir)
-		}
-		configPaths = append(configPaths, ctxDir)
-
+		slog.Debug("spring: processing context", "dir", ctxDir)
 		repo := repoRootFor(ctxDir, repoRoots)
-		props, err := ReadApplicationProperties(configPaths, fileIndex[repo], excludeProfiles)
+		props, err := ReadApplicationProperties(ctxDir, fileIndex[repo], excludeProfiles)
 		if err != nil {
-			log.Printf("Could not read application properties in %s: %v", ctxDir, err)
+			slog.Warn("spring: could not read application properties", "dir", ctxDir, "err", err)
 			continue
 		}
 		if bindings := StreamBindings(props); len(bindings) > 0 {
+			slog.Info("spring: found bindings", "count", len(bindings), "dir", ctxDir)
+			logUnresolvedPlaceholders(ctxDir, bindings)
 			result[ctxDir] = bindings
 		}
 	}
