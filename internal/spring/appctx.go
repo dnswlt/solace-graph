@@ -21,6 +21,9 @@ var applicationYMLPattern = regexp.MustCompile(`^application(-[^.]+)?\.yml$`)
 var bindingDestinationKey = regexp.MustCompile(`^spring\.cloud\.stream\.bindings\.(.+)\.destination$`)
 var bindingNamePattern = regexp.MustCompile(`^(.+)-(in|out)-\d+$`)
 
+var placeholderRe = regexp.MustCompile(`\${([^}]+)}`)
+var importKeyPattern = regexp.MustCompile(`^spring\.config\.import(\[\d+\])?$`)
+
 // BindingDirection indicates whether a stream binding is an input (consumer) or output (producer).
 type BindingDirection string
 
@@ -120,7 +123,6 @@ func flattenValue(v any, prefix string, result map[string]string) {
 
 func processImports(result map[string]string, fileIndex map[string]string) error {
 	imported := make(map[string]bool)
-	importKeyPattern := regexp.MustCompile(`^spring\.config\.import(\[\d+\])?$`)
 
 	for {
 		var toImport []string
@@ -187,7 +189,6 @@ func lookupRelaxed(props map[string]string, key string) (string, bool) {
 // resolvePlaceholders iteratively resolves Spring property placeholders in the format ${key} or ${key:default}.
 // It performs up to 10 passes to handle nested placeholders (e.g. ${prefix_${suffix}}).
 func resolvePlaceholders(result map[string]string) {
-	placeholderRe := regexp.MustCompile(`\${([^}]+)}`)
 	changed := true
 	iterations := 0
 
@@ -303,27 +304,26 @@ func StreamBindings(props map[string]string) []StreamBinding {
 // Bindings containing Spring Cloud Stream Request/Reply variables like
 // ${replyTopicWithWildcards|...} are ignored and will never match.
 func MatchTopics(consumerTopic, producerTopic string) bool {
-	if strings.Contains(consumerTopic, "${replyTopicWithWildcards|") ||
-		strings.Contains(producerTopic, "${replyTopicWithWildcards|") {
+	cLevels := TopicLevels(consumerTopic)
+	pLevels := TopicLevels(producerTopic)
+	if cLevels == nil || pLevels == nil {
 		return false
 	}
-
-	// Treat unresolved properties as '*' logically.
-	c := normalizePlaceholders(consumerTopic)
-	p := normalizePlaceholders(producerTopic)
-
-	cLevels := strings.Split(c, "/")
-	pLevels := strings.Split(p, "/")
-
-	return matchLevels(cLevels, pLevels)
+	return MatchLevels(cLevels, pLevels)
 }
 
-func normalizePlaceholders(topic string) string {
-	placeholderRe := regexp.MustCompile(`\${[^}]+}`)
-	return placeholderRe.ReplaceAllString(topic, "*")
+// TopicLevels normalizes a topic (placeholders to '*') and splits it into levels.
+// It returns nil if the topic contains a Request/Reply variable.
+func TopicLevels(topic string) []string {
+	if strings.Contains(topic, "${replyTopicWithWildcards|") {
+		return nil
+	}
+	normalized := placeholderRe.ReplaceAllString(topic, "*")
+	return strings.Split(normalized, "/")
 }
 
-func matchLevels(cLevels, pLevels []string) bool {
+// MatchLevels compares consumer topic levels against producer topic levels.
+func MatchLevels(cLevels, pLevels []string) bool {
 	i, j := 0, 0
 	for i < len(cLevels) && j < len(pLevels) {
 		if cLevels[i] == ">" {

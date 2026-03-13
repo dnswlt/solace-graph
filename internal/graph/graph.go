@@ -54,6 +54,18 @@ type Node struct {
 	Edges []Edge      `json:"edges"`
 }
 
+type preparedBinding struct {
+	binding spring.StreamBinding
+	levels  []string
+}
+
+type preparedApp struct {
+	app      Application
+	in       []preparedBinding
+	out      []preparedBinding
+	bindings []preparedBinding
+}
+
 // Build constructs the dependency graph from a list of discovered applications.
 // A dependency (edge) exists from application A to B if A has a Solace input binding
 // that matches a Solace output binding of B.
@@ -63,47 +75,60 @@ func Build(apps []Application) []Node {
 		return apps[i].Name < apps[j].Name
 	})
 
+	prepared := make([]preparedApp, len(apps))
+	for i, app := range apps {
+		pa := preparedApp{app: app}
+		for _, b := range app.Bindings {
+			if !isSolace(b) {
+				continue
+			}
+			pb := preparedBinding{
+				binding: b,
+				levels:  spring.TopicLevels(b.Destination),
+			}
+			pa.bindings = append(pa.bindings, pb)
+			if b.Direction == spring.BindingIn {
+				pa.in = append(pa.in, pb)
+			} else if b.Direction == spring.BindingOut {
+				pa.out = append(pa.out, pb)
+			}
+		}
+		prepared[i] = pa
+	}
+
 	var nodes []Node
-	for _, app := range apps {
+	for _, pa := range prepared {
 		edgeMap := make(map[string]*Edge)
 
-		for _, localB := range app.Bindings {
-			if !isSolace(localB) {
+		for _, other := range prepared {
+			if pa.app.Name == other.app.Name {
 				continue
 			}
 
-			for _, otherApp := range apps {
-				if app.Name == otherApp.Name {
-					continue
-				}
-
-				for _, otherB := range otherApp.Bindings {
-					if !isSolace(otherB) {
-						continue
-					}
-
-					// We define two directions:
-					// 1. Current app consumes FROM other app (Local: IN, Other: OUT)
-					// 2. Current app produces TO other app (Local: OUT, Other: IN)
-					
-					var direction string
-					if localB.Direction == spring.BindingIn && otherB.Direction == spring.BindingOut {
-						if spring.MatchTopics(localB.Destination, otherB.Destination) {
-							direction = "from"
-						}
-					} else if localB.Direction == spring.BindingOut && otherB.Direction == spring.BindingIn {
-						if spring.MatchTopics(otherB.Destination, localB.Destination) {
-							direction = "to"
-						}
-					}
-
-					if direction != "" {
-						e, ok := edgeMap[otherApp.Name]
+			// Current app consumes FROM other app (pa.in matches other.out)
+			for _, inB := range pa.in {
+				for _, outB := range other.out {
+					if spring.MatchLevels(inB.levels, outB.levels) {
+						e, ok := edgeMap[other.app.Name]
 						if !ok {
-							e = &Edge{To: otherApp.Name, Direction: direction}
-							edgeMap[otherApp.Name] = e
+							e = &Edge{To: other.app.Name, Direction: "from"}
+							edgeMap[other.app.Name] = e
 						}
-						e.Matches = append(e.Matches, BindingMatch{Local: localB, Remote: otherB})
+						e.Matches = append(e.Matches, BindingMatch{Local: inB.binding, Remote: outB.binding})
+					}
+				}
+			}
+
+			// Current app produces TO other app (pa.out matches other.in)
+			for _, outB := range pa.out {
+				for _, inB := range other.in {
+					if spring.MatchLevels(inB.levels, outB.levels) {
+						e, ok := edgeMap[other.app.Name]
+						if !ok {
+							e = &Edge{To: other.app.Name, Direction: "to"}
+							edgeMap[other.app.Name] = e
+						}
+						e.Matches = append(e.Matches, BindingMatch{Local: outB.binding, Remote: inB.binding})
 					}
 				}
 			}
@@ -125,7 +150,7 @@ func Build(apps []Application) []Node {
 		})
 
 		nodes = append(nodes, Node{
-			App:   app,
+			App:   pa.app,
 			Edges: edges,
 		})
 	}

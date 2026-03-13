@@ -384,11 +384,9 @@ const htmlTemplate = `
 </html>
 `
 
+var reportTemplate = template.Must(template.New("report").Parse(htmlTemplate))
+
 // Generate produces an HTML report from the dependency graph nodes.
 func Generate(w io.Writer, nodes []graph.Node) error {
-	tmpl, err := template.New("report").Parse(htmlTemplate)
-	if err != nil {
-		return err
-	}
-	return tmpl.Execute(w, nodes)
+	return reportTemplate.Execute(w, nodes)
 }
