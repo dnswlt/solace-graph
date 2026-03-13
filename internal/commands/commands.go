@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -17,15 +18,36 @@ import (
 	"github.com/dnswlt/solace-graph/internal/spring"
 )
 
+// multiFlag is a flag.Value that accumulates repeated string flags.
+type multiFlag []string
+
+func (f *multiFlag) String() string  { return strings.Join(*f, ", ") }
+func (f *multiFlag) Set(s string) error { *f = append(*f, s); return nil }
+
 // Collect extracts bindings from all Spring application contexts found under the given
 // roots and writes them as JSON to out.
 // It merges multiple files belonging to the same application (e.g. same pom.xml or folder).
 func Collect(out io.Writer, args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("usage: collect <root> [<root>...]")
+	fs := flag.NewFlagSet("collect", flag.ContinueOnError)
+	var excludeProfileFlags multiFlag
+	fs.Var(&excludeProfileFlags, "exclude-profile", "regex matched against profile suffixes to exclude (repeatable), e.g. -exclude-profile 'dev|test'")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() < 1 {
+		return fmt.Errorf("usage: collect [-exclude-profile <regex>]... <root> [<root>...]")
 	}
 
-	result, err := spring.FindStreamBindings(args)
+	excludeProfiles := make([]*regexp.Regexp, len(excludeProfileFlags))
+	for i, s := range excludeProfileFlags {
+		re, err := regexp.Compile(s)
+		if err != nil {
+			return fmt.Errorf("invalid -exclude-profile %q: %v", s, err)
+		}
+		excludeProfiles[i] = re
+	}
+
+	result, err := spring.FindStreamBindings(fs.Args(), excludeProfiles)
 	if err != nil {
 		return fmt.Errorf("FindStreamBindings: %v", err)
 	}

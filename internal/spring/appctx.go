@@ -43,10 +43,11 @@ type StreamBinding struct {
 
 // ReadApplicationProperties takes a list of paths, which can be directories or files,
 // and reads all application[-*].yml files in all given directories as well as all given files,
-// as Spring application properties YAML files.
+// as Spring application properties YAML files. Profile-specific files whose suffix matches
+// any of the excludeProfiles regexes are skipped.
 //
 // It returns a mapping from flattened keys ("my.funny.property") to their values.
-func ReadApplicationProperties(paths []string, fileIndex map[string]string) (map[string]string, error) {
+func ReadApplicationProperties(paths []string, fileIndex map[string]string, excludeProfiles []*regexp.Regexp) (map[string]string, error) {
 	result := make(map[string]string)
 	for _, path := range paths {
 		info, err := os.Stat(path)
@@ -59,7 +60,7 @@ func ReadApplicationProperties(paths []string, fileIndex map[string]string) (map
 				return nil, fmt.Errorf("spring properties: cannot read directory %s: %w", path, err)
 			}
 			for _, entry := range entries {
-				if !entry.IsDir() && applicationYMLPattern.MatchString(entry.Name()) {
+				if !entry.IsDir() && applicationYMLPattern.MatchString(entry.Name()) && !excludedProfile(entry.Name(), excludeProfiles) {
 					if err := readAndMerge(filepath.Join(path, entry.Name()), result); err != nil {
 						return nil, err
 					}
@@ -79,6 +80,25 @@ func ReadApplicationProperties(paths []string, fileIndex map[string]string) (map
 	resolvePlaceholders(result)
 
 	return result, nil
+}
+
+// excludedProfile reports whether the profile suffix of the given application YAML filename
+// matches any of the given exclude regexes.
+// The profile suffix is the part between "application-" and the file extension,
+// e.g. "dev" for "application-dev.yml" or "kafka-dev" for "application-kafka-dev.yml".
+// Files without a profile suffix (i.e. "application.yml") are never excluded.
+func excludedProfile(filename string, excludeProfiles []*regexp.Regexp) bool {
+	m := applicationYMLPattern.FindStringSubmatch(filename)
+	if m == nil || m[1] == "" {
+		return false // base application.yml, never excluded
+	}
+	profile := m[1][1:] // strip leading "-"
+	for _, re := range excludeProfiles {
+		if re.MatchString(profile) {
+			return true
+		}
+	}
+	return false
 }
 
 func readAndMerge(path string, result map[string]string) error {
@@ -276,7 +296,7 @@ func repoRootFor(fpath string, repoRoots []string) string {
 // For each context, it reads all application*.yml files together, allowing for
 // placeholder resolution across files.
 // It returns a map from context directory path to its non-empty list of stream bindings.
-func FindStreamBindings(roots []string) (map[string][]StreamBinding, error) {
+func FindStreamBindings(roots []string, excludeProfiles []*regexp.Regexp) (map[string][]StreamBinding, error) {
 	repoRoots, err := findRepoRoots(roots)
 	if err != nil {
 		return nil, err
@@ -310,13 +330,13 @@ func FindStreamBindings(roots []string) (map[string][]StreamBinding, error) {
 			return nil
 		}
 
-		// Identify the application context. We look for a 'src/main/resources' parent.
-		ctxDir := filepath.Dir(path)
+		// Only include contexts under src/main/resources; skip src/test/resources and others.
 		resPath := filepath.Join("src", "main", "resources")
-		if idx := strings.LastIndex(path, resPath); idx != -1 {
-			ctxDir = path[:idx+len(resPath)]
+		idx := strings.LastIndex(path, resPath)
+		if idx == -1 {
+			return nil
 		}
-		contextDirs[ctxDir] = true
+		contextDirs[path[:idx+len(resPath)]] = true
 		return nil
 	}
 
@@ -347,7 +367,7 @@ func FindStreamBindings(roots []string) (map[string][]StreamBinding, error) {
 		configPaths = append(configPaths, ctxDir)
 
 		repo := repoRootFor(ctxDir, repoRoots)
-		props, err := ReadApplicationProperties(configPaths, fileIndex[repo])
+		props, err := ReadApplicationProperties(configPaths, fileIndex[repo], excludeProfiles)
 		if err != nil {
 			log.Printf("Could not read application properties in %s: %v", ctxDir, err)
 			continue
