@@ -17,6 +17,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Debug enables verbose logging of context processing and unresolved placeholders.
+var Debug bool
+
+func debugf(format string, args ...any) {
+	if Debug {
+		log.Printf("[debug] "+format, args...)
+	}
+}
+
 var applicationYMLPattern = regexp.MustCompile(`^application(-[^.]+)?\.ya?ml$`)
 
 var bindingDestinationKey = regexp.MustCompile(`^spring\.cloud\.stream\.bindings\.(.+)\.destination$`)
@@ -253,6 +262,19 @@ func resolvePlaceholders(result map[string]string) {
 		}
 		iterations++
 	}
+
+	if Debug {
+		var unresolved []string
+		for k, v := range result {
+			if placeholderRe.MatchString(v) {
+				unresolved = append(unresolved, k)
+			}
+		}
+		sort.Strings(unresolved)
+		for _, k := range unresolved {
+			debugf("unresolved placeholder: %s = %s", k, result[k])
+		}
+	}
 }
 
 // findRepoRoots returns the paths of all git repositories under the given roots,
@@ -367,13 +389,18 @@ func FindStreamBindings(roots []string, excludeProfiles []*regexp.Regexp) (map[s
 		configPaths = append(configPaths, ctxDir)
 
 		repo := repoRootFor(ctxDir, repoRoots)
+		debugf("processing context: %s", ctxDir)
 		props, err := ReadApplicationProperties(configPaths, fileIndex[repo], excludeProfiles)
 		if err != nil {
 			log.Printf("Could not read application properties in %s: %v", ctxDir, err)
 			continue
 		}
+		debugf("  loaded %d properties", len(props))
 		if bindings := StreamBindings(props); len(bindings) > 0 {
+			debugf("  found %d binding(s)", len(bindings))
 			result[ctxDir] = bindings
+		} else {
+			debugf("  no bindings found")
 		}
 	}
 

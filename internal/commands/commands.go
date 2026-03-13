@@ -31,12 +31,14 @@ func Collect(out io.Writer, args []string) error {
 	fs := flag.NewFlagSet("collect", flag.ContinueOnError)
 	var excludeProfileFlags multiFlag
 	fs.Var(&excludeProfileFlags, "exclude-profile", "regex matched against profile suffixes to exclude (repeatable), e.g. -exclude-profile 'dev|test'")
+	verbose := fs.Bool("v", false, "enable debug logging of context processing and unresolved placeholders")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() < 1 {
-		return fmt.Errorf("usage: collect [-exclude-profile <regex>]... <root> [<root>...]")
+		return fmt.Errorf("usage: collect [-v] [-exclude-profile <regex>]... <root> [<root>...]")
 	}
+	spring.Debug = *verbose
 
 	excludeProfiles := make([]*regexp.Regexp, len(excludeProfileFlags))
 	for i, s := range excludeProfileFlags {
