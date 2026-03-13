@@ -11,12 +11,13 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-var applicationYMLPattern = regexp.MustCompile(`^application(-[^.]+)?\.yml$`)
+var applicationYMLPattern = regexp.MustCompile(`^application(-[^.]+)?\.ya?ml$`)
 
 var bindingDestinationKey = regexp.MustCompile(`^spring\.cloud\.stream\.bindings\.(.+)\.destination$`)
 var bindingNamePattern = regexp.MustCompile(`^(.+)-(in|out)-\d+$`)
@@ -232,44 +233,133 @@ func resolvePlaceholders(result map[string]string) {
 	}
 }
 
-// FindStreamBindings walks root recursively and scans each file whose full path
-// matches any of the given regular expressions. Each matching file is scanned
-// individually. It returns a map from file path to its non-empty list of stream bindings.
-func FindStreamBindings(root string, patterns []*regexp.Regexp) (map[string][]StreamBinding, error) {
-	fileIndex := make(map[string]string)
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		if ext := filepath.Ext(path); ext == ".yml" || ext == ".yaml" {
-			fileIndex[filepath.Base(path)] = path
-		}
-		return nil
-	})
-
-	result := make(map[string][]StreamBinding)
+// findRepoRoots returns the paths of all git repositories under root, sorted
+// longest-first so that nested repos match before their parent.
+func findRepoRoots(root string) ([]string, error) {
+	var roots []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
 			return err
 		}
-		for _, re := range patterns {
-			if re.MatchString(path) {
-				props, err := ReadApplicationProperties([]string{path}, fileIndex)
-				if err != nil {
-					log.Printf("Could not read %s: %v", path, err)
-					break
-				}
-				if bindings := StreamBindings(props); len(bindings) > 0 {
-					result[path] = bindings
-				}
-				break
-			}
+		if d.IsDir() && d.Name() == ".git" {
+			roots = append(roots, filepath.Dir(path))
+			return fs.SkipDir
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+	sort.Slice(roots, func(i, j int) bool {
+		return len(roots[i]) > len(roots[j])
+	})
+	return roots, nil
+}
+
+// repoRootFor returns the deepest repo root that is an ancestor of fpath,
+// or an empty string if fpath is not inside any known repo.
+func repoRootFor(fpath string, repoRoots []string) string {
+	for _, r := range repoRoots {
+		if strings.HasPrefix(fpath, r+string(filepath.Separator)) || fpath == r {
+			return r
+		}
+	}
+	return ""
+}
+
+// FindStreamBindings walks root recursively and finds all Spring application contexts.
+// A context is usually a 'src/main/resources' directory. For each context, it reads
+// all application*.yml files together, allowing for placeholder resolution across files.
+// It returns a map from context directory path to its non-empty list of stream bindings.
+func FindStreamBindings(root string, patterns []*regexp.Regexp) (map[string][]StreamBinding, error) {
+	repoRoots, err := findRepoRoots(root)
+	if err != nil {
+		return nil, err
+	}
+
+	// fileIndex maps repo root -> (YAML basename -> full path) to resolve
+	// spring.config.import directives. Scoping per repo prevents files from one
+	// service from satisfying imports in another unrelated service.
+	fileIndex := make(map[string]map[string]string)
+	contextDirs := make(map[string]bool)
+
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+
+		// Always update fileIndex for YAML files (needed for spring.config.import).
+		if ext := filepath.Ext(path); ext == ".yml" || ext == ".yaml" {
+			repo := repoRootFor(path, repoRoots)
+			if fileIndex[repo] == nil {
+				fileIndex[repo] = make(map[string]string)
+			}
+			fileIndex[repo][filepath.Base(path)] = path
+		}
+
+		// Only care about Spring configuration files matching patterns.
+		if !applicationYMLPattern.MatchString(d.Name()) {
+			return nil
+		}
+
+		matched := false
+		for _, re := range patterns {
+			if re.MatchString(path) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return nil
+		}
+
+		// Identify the application context. We look for a 'src/main/resources' parent.
+		ctxDir := filepath.Dir(path)
+		resPath := filepath.Join("src", "main", "resources")
+		if idx := strings.LastIndex(path, resPath); idx != -1 {
+			ctxDir = path[:idx+len(resPath)]
+		}
+		contextDirs[ctxDir] = true
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Process each identified context.
+	result := make(map[string][]StreamBinding)
+	var sortedContexts []string
+	for cd := range contextDirs {
+		sortedContexts = append(sortedContexts, cd)
+	}
+	sort.Strings(sortedContexts)
+
+	for _, ctxDir := range sortedContexts {
+		// Read all application*.yml files in this context.
+		// We include both the context directory itself and its 'config' subdirectory if it exists.
+		// Spring processes them such that config/ overrides the root.
+		// In our implementation, we must put the overrides FIRST.
+		var configPaths []string
+		configDir := filepath.Join(ctxDir, "config")
+		if info, err := os.Stat(configDir); err == nil && info.IsDir() {
+			configPaths = append(configPaths, configDir)
+		}
+		configPaths = append(configPaths, ctxDir)
+
+		repo := repoRootFor(ctxDir, repoRoots)
+		props, err := ReadApplicationProperties(configPaths, fileIndex[repo])
+		if err != nil {
+			log.Printf("Could not read application properties in %s: %v", ctxDir, err)
+			continue
+		}
+		if bindings := StreamBindings(props); len(bindings) > 0 {
+			result[ctxDir] = bindings
+		}
+	}
+
 	return result, nil
 }
 
