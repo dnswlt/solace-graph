@@ -72,20 +72,24 @@ def clone_url(repo: dict, prefer_ssh: bool) -> str | None:
 def sync_repo(url: str, dest: str) -> bool:
     """Clone the repo if dest doesn't exist, otherwise pull. Returns True on success."""
     slug = os.path.basename(dest)
+    env = os.environ.copy()
+    # Prevent Git from ever prompting for credentials on the terminal.
+    # This ensures that failed auth (e.g. missing SSH key) fails fast instead of hanging.
+    env["GIT_TERMINAL_PROMPT"] = "0"
     
     if os.path.isdir(os.path.join(dest, ".git")):
         with print_lock:
             print(f"  pulling  {slug} ({dest})")
         result = subprocess.run(
             ["git", "-C", dest, "pull", "--ff-only"],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=env
         )
     else:
         with print_lock:
             print(f"  cloning  {url} -> {dest}")
         result = subprocess.run(
             ["git", "clone", url, dest],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=env
         )
 
     with print_lock:
@@ -107,12 +111,12 @@ def main():
     parser.add_argument("--token", default=None, help="Bitbucket personal access token (or set BITBUCKET_TOKEN env var)")
     parser.add_argument("--ssh", action="store_true", help="Prefer SSH clone URLs over HTTPS")
     parser.add_argument("--jobs", "-j", type=int, default=4, help="Number of parallel sync jobs (default: 4)")
+    parser.add_argument("--include-archived", action="store_true", help="Include repositories that are archived (skipped by default)")
     args = parser.parse_args()
 
     token = args.token or os.environ.get("BITBUCKET_TOKEN")
 
-    # Parse base URL and project key from the project URL.
-    # Expected format: https://<host>/projects/<PROJECT_KEY>
+    # ... (URL parsing logic remains the same) ...
     url = args.project_url.rstrip("/")
     parts = url.split("/projects/")
     if len(parts) != 2 or not parts[1]:
@@ -124,8 +128,19 @@ def main():
     project_key = parts[1].split("/")[0]
 
     print(f"Fetching repositories for project {project_key!r} from {base_url} ...")
-    repos = fetch_repos(base_url, project_key, token)
-    print(f"Found {len(repos)} repositories.\n")
+    all_repos = fetch_repos(base_url, project_key, token)
+    
+    # Filter archived repos unless requested otherwise
+    if not args.include_archived:
+        repos = [r for r in all_repos if not r.get("archived")]
+        archived_count = len(all_repos) - len(repos)
+        if archived_count > 0:
+            print(f"Found {len(all_repos)} repositories (skipping {archived_count} archived).")
+        else:
+            print(f"Found {len(all_repos)} repositories.")
+    else:
+        repos = all_repos
+        print(f"Found {len(repos)} repositories (including archived).\n")
 
     target_dir = os.path.abspath(args.target_dir)
     os.makedirs(target_dir, exist_ok=True)
@@ -147,7 +162,23 @@ def main():
         results = list(executor.map(task, repos))
         failed = [r for r in results if r is not None]
 
+    # Identify local repos that are no longer in the project (or filtered out)
+    active_slugs = {repo["slug"] for repo in repos}
+    obsolete = []
+    if os.path.isdir(target_dir):
+        for entry in os.listdir(target_dir):
+            full_path = os.path.join(target_dir, entry)
+            if os.path.isdir(os.path.join(full_path, ".git")):
+                if entry not in active_slugs:
+                    obsolete.append(entry)
+
     print()
+    if obsolete:
+        print(f"No longer in project ({len(obsolete)}):")
+        for slug in sorted(obsolete):
+            print(f"  {slug}")
+        print()
+
     if failed:
         print(f"Failed ({len(failed)}): {', '.join(failed)}", file=sys.stderr)
         sys.exit(1)
