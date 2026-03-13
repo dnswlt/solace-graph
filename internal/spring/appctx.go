@@ -160,15 +160,21 @@ func processImports(result map[string]string, fileIndex map[string]string) error
 		for k, v := range result {
 			if importKeyPattern.MatchString(k) {
 				for p := range strings.SplitSeq(v, ",") {
-					p = strings.TrimSpace(p)
-					p = strings.TrimPrefix(p, "optional:")
+					raw := strings.TrimSpace(p)
+					p = strings.TrimPrefix(raw, "optional:")
 					p = strings.TrimPrefix(p, "classpath:")
 					p = strings.TrimPrefix(p, "file:")
 
-					if p != "" && !imported[p] {
-						toImport = append(toImport, p)
-						imported[p] = true
+					if p == "" {
+						continue
 					}
+					if imported[p] {
+						debugf("  import already processed, skipping: %s", raw)
+						continue
+					}
+					debugf("  queuing import: %s -> %s", raw, p)
+					toImport = append(toImport, p)
+					imported[p] = true
 				}
 			}
 		}
