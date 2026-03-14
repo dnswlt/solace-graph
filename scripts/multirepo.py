@@ -32,6 +32,12 @@ from concurrent.futures import ThreadPoolExecutor
 # Lock to prevent interleaved output from multiple threads
 print_lock = threading.Lock()
 
+# Maps repo directory names to app names in the versions file.
+# Used when the repo contains multiple apps and its name doesn't match any entry.
+REPO_ALIASES: dict[str, str] = {
+    # "my-multirepo": "some-service-a",
+}
+
 
 def fetch_repos(base_url: str, project_key: str, token: str | None) -> list[dict]:
     """Fetch all repositories for a project, handling pagination."""
@@ -240,8 +246,10 @@ def cmd_checkout_tags(args):
 
         count += 1
         if pinned:
-            if entry in pinned:
-                tag = pinned[entry]["git_ref"]
+            lookup = REPO_ALIASES.get(entry, entry)
+            app = pinned.get(lookup)
+            if app:
+                tag = app["git_ref"]
             else:
                 print(f"  {entry}: not in versions file, falling back to latest semver tag")
                 tag = get_latest_tag(dest)
