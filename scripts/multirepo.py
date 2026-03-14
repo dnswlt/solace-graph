@@ -219,21 +219,39 @@ def cmd_checkout_tags(args):
         print(f"Error: target directory {target_dir!r} does not exist.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Scanning {target_dir} for repositories and checking out latest semver tags...")
-    
+    pinned: dict[str, str] = {}
+    if args.versions_file:
+        try:
+            with open(args.versions_file) as f:
+                pinned = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"Error reading versions file {args.versions_file!r}: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Scanning {target_dir} for repositories and checking out pinned versions from {args.versions_file!r}...")
+    else:
+        print(f"Scanning {target_dir} for repositories and checking out latest semver tags...")
+
     count = 0
     failed = []
     for entry in sorted(os.listdir(target_dir)):
         dest = os.path.join(target_dir, entry)
         if not os.path.isdir(os.path.join(dest, ".git")):
             continue
-        
+
         count += 1
-        tag = get_latest_tag(dest)
+        if pinned:
+            if entry in pinned:
+                tag = pinned[entry]["git_ref"]
+            else:
+                print(f"  {entry}: not in versions file, falling back to latest semver tag")
+                tag = get_latest_tag(dest)
+        else:
+            tag = get_latest_tag(dest)
+
         if not tag:
             print(f"  {entry}: no semver tags found")
             continue
-        
+
         if not checkout_tag(dest, tag):
             failed.append(entry)
 
@@ -260,6 +278,11 @@ def main():
     # Checkout-tags command
     parser_tags = subparsers.add_parser("checkout-tags", help="Locally checkout latest semver tags.")
     parser_tags.add_argument("--target-dir", default=".", help="Directory containing the repos")
+    parser_tags.add_argument(
+        "--versions-file", default=None,
+        help="JSON file from oc_versions.py mapping repo name to image tag; "
+             "falls back to latest semver for repos not listed"
+    )
     parser_tags.set_defaults(func=cmd_checkout_tags)
 
     args = parser.parse_args()
