@@ -3,9 +3,15 @@ package report
 import (
 	"html/template"
 	"io"
+	"time"
 
 	"github.com/dnswlt/solace-graph/internal/graph"
 )
+
+type reportData struct {
+	Nodes       []graph.Node
+	GeneratedAt time.Time
+}
 
 const htmlTemplate = `
 <!DOCTYPE html>
@@ -239,8 +245,7 @@ const htmlTemplate = `
         .binding-sub { font-size: 0.75rem; color: var(--text-muted); display: block; }
 
         details.all-bindings {
-            margin-top: 1.5rem;
-            border-top: 1px solid var(--border-color);
+            margin-top: 0.5rem;
             padding-top: 0.75rem;
         }
 
@@ -268,6 +273,7 @@ const htmlTemplate = `
         .bindings-table td {
             padding: 0.4rem;
             border: 1px solid var(--border-color);
+            word-break: break-all;
         }
 
         .bindings-table code { font-family: ui-monospace, monospace; }
@@ -287,14 +293,14 @@ const htmlTemplate = `
         <nav>
             <h3>Applications</h3>
             <ul id="nav-list">
-            {{range .}}
+            {{range .Nodes}}
                 <li data-name="{{.App.Name}}"><a href="#{{.App.Name}}">{{.App.Name}}</a></li>
             {{end}}
             </ul>
         </nav>
 
         <div id="apps-container">
-        {{range .}}
+        {{range .Nodes}}
         <div class="app-card" id="{{.App.Name}}" data-name="{{.App.Name}}">
             <div class="app-header">
                 <h2>{{.App.Name}}{{if .App.Version}} <span style="font-weight: normal; color: var(--text-muted); font-size: 1rem;">v{{.App.Version}}</span>{{end}}</h2>
@@ -313,12 +319,6 @@ const htmlTemplate = `
                 <h3>Solace Relationships</h3>
                 {{if .Edges}}
                 <table class="rel-table">
-                    <thead>
-                        <tr>
-                            <th>Connected Application</th>
-                            <th>Summary & Details</th>
-                        </tr>
-                    </thead>
                     <tbody>
                     {{range .Edges}}
                         {{$dir := .Direction}}
@@ -408,6 +408,9 @@ const htmlTemplate = `
         </div>
         {{end}}
         </div>
+        <footer style="margin-top: 2rem; padding-top: 0.75rem; border-top: 1px solid var(--border-color); font-size: 0.75rem; color: var(--text-muted);">
+            Generated on {{.GeneratedAt.Format "2006-01-02 15:04:05 MST"}}
+        </footer>
     </div>
 
     <script>
@@ -451,5 +454,8 @@ var reportTemplate = template.Must(template.New("report").Parse(htmlTemplate))
 
 // Generate produces an HTML report from the dependency graph nodes.
 func Generate(w io.Writer, nodes []graph.Node) error {
-	return reportTemplate.Execute(w, nodes)
+	return reportTemplate.Execute(w, reportData{
+		Nodes:       nodes,
+		GeneratedAt: time.Now(),
+	})
 }
