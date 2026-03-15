@@ -390,7 +390,7 @@ const htmlTemplate = `
                             <th>Binding Name</th>
                             <th>Dir</th>
                             <th>Destination</th>
-                            <th>Binder</th>
+                            <th>Binder Type</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -399,7 +399,7 @@ const htmlTemplate = `
                             <td>{{.BindingName}}</td>
                             <td>{{.Direction}}</td>
                             <td><code>{{.Destination}}</code></td>
-                            <td>{{.Binder}}</td>
+                            <td>{{.BinderType}}</td>
                         </tr>
                     {{end}}
                     </tbody>

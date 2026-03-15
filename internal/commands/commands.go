@@ -30,12 +30,14 @@ func (f *multiFlag) Set(s string) error { *f = append(*f, s); return nil }
 func Collect(out io.Writer, args []string) error {
 	fs := flag.NewFlagSet("collect", flag.ContinueOnError)
 	var excludeProfileFlags multiFlag
+	var excludeAppFlags multiFlag
 	fs.Var(&excludeProfileFlags, "exclude-profile", "regex matched against profile suffixes to exclude (repeatable), e.g. -exclude-profile 'dev|test'")
+	fs.Var(&excludeAppFlags, "exclude-app", "regex matched against application names to exclude (repeatable), e.g. -exclude-app 'test-.*'")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() < 1 {
-		return fmt.Errorf("usage: collect [-exclude-profile <regex>]... <root> [<root>...]")
+		return fmt.Errorf("usage: collect [-exclude-profile <regex>]... [-exclude-app <regex>]... <root> [<root>...]")
 	}
 
 	excludeProfiles := make([]*regexp.Regexp, len(excludeProfileFlags))
@@ -45,6 +47,15 @@ func Collect(out io.Writer, args []string) error {
 			return fmt.Errorf("invalid -exclude-profile %q: %v", s, err)
 		}
 		excludeProfiles[i] = re
+	}
+
+	excludeApps := make([]*regexp.Regexp, len(excludeAppFlags))
+	for i, s := range excludeAppFlags {
+		re, err := regexp.Compile(s)
+		if err != nil {
+			return fmt.Errorf("invalid -exclude-app %q: %v", s, err)
+		}
+		excludeApps[i] = re
 	}
 
 	result, err := spring.FindStreamBindings(fs.Args(), excludeProfiles)
@@ -57,6 +68,9 @@ func Collect(out io.Writer, args []string) error {
 
 	for path, bindings := range result {
 		name, version, discovery := findApplicationName(path)
+		if matchesAny(excludeApps, name) {
+			continue
+		}
 		newApp := &graph.Application{
 			Name:      name,
 			Version:   version,
@@ -154,6 +168,15 @@ func readApplications(path string) ([]graph.Application, error) {
 		return nil, fmt.Errorf("could not decode input file %q: %v", path, err)
 	}
 	return apps, nil
+}
+
+func matchesAny(patterns []*regexp.Regexp, s string) bool {
+	for _, re := range patterns {
+		if re.MatchString(s) {
+			return true
+		}
+	}
+	return false
 }
 
 func findApplicationName(path string) (name string, version string, discovery string) {

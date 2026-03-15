@@ -160,7 +160,7 @@ func Build(apps []Application) []Node {
 }
 
 func isSolace(b spring.StreamBinding) bool {
-	if strings.Contains(b.Binder, "solace") {
+	if strings.Contains(b.BinderType, "solace") {
 		return true
 	}
 	// Heuristic: Solace topics typically use '/', while Kafka topics use '.'.

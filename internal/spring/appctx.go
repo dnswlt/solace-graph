@@ -40,6 +40,7 @@ type StreamBinding struct {
 	Direction   BindingDirection // "in" or "out"
 	Destination string           // topic/queue name
 	Binder      string           // binder name, e.g. "kafka" or "solace"
+	BinderType  string           // binder type, e.g. "solace", "kafka", "rabbit"; equals Binder if not separately configured
 }
 
 // ReadApplicationProperties reads a directory or file as Spring application properties YAML.
@@ -436,6 +437,14 @@ func StreamBindings(props map[string]string) []StreamBinding {
 			b.Binder = binder
 		} else {
 			b.Binder = defaultBinder
+		}
+		if b.Binder != "" {
+			if t, ok := lookupRelaxed(props, "spring.cloud.stream.binders."+b.Binder+".type"); ok {
+				b.BinderType = t
+			} else {
+				// No explicit type configured: the binder name is the type itself.
+				b.BinderType = b.Binder
+			}
 		}
 		bindings = append(bindings, b)
 	}

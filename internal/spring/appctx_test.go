@@ -298,6 +298,69 @@ func TestMatchTopics(t *testing.T) {
 	}
 }
 
+func TestStreamBindingsBinderType(t *testing.T) {
+	tests := []struct {
+		name            string
+		props           map[string]string
+		wantBinder      string
+		wantBinderType  string
+	}{
+		{
+			name: "single-binder: name is the type",
+			props: map[string]string{
+				"spring.cloud.stream.bindings.myBinding-in-0.destination": "some/topic",
+				"spring.cloud.stream.bindings.myBinding-in-0.binder":      "solace",
+			},
+			wantBinder:     "solace",
+			wantBinderType: "solace",
+		},
+		{
+			name: "multi-binder: named binder with explicit type",
+			props: map[string]string{
+				"spring.cloud.stream.bindings.myBinding-in-0.destination": "some/topic",
+				"spring.cloud.stream.bindings.myBinding-in-0.binder":      "solace-prod",
+				"spring.cloud.stream.binders.solace-prod.type":            "solace",
+			},
+			wantBinder:     "solace-prod",
+			wantBinderType: "solace",
+		},
+		{
+			name: "default binder falls back to type lookup",
+			props: map[string]string{
+				"spring.cloud.stream.bindings.myBinding-in-0.destination": "some/topic",
+				"spring.cloud.stream.default-binder":                      "kafka-prod",
+				"spring.cloud.stream.binders.kafka-prod.type":             "kafka",
+			},
+			wantBinder:     "kafka-prod",
+			wantBinderType: "kafka",
+		},
+		{
+			name: "no binder configured",
+			props: map[string]string{
+				"spring.cloud.stream.bindings.myBinding-in-0.destination": "some/topic",
+			},
+			wantBinder:     "",
+			wantBinderType: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bindings := StreamBindings(tt.props)
+			if len(bindings) != 1 {
+				t.Fatalf("expected 1 binding, got %d", len(bindings))
+			}
+			b := bindings[0]
+			if b.Binder != tt.wantBinder {
+				t.Errorf("Binder: got %q, want %q", b.Binder, tt.wantBinder)
+			}
+			if b.BinderType != tt.wantBinderType {
+				t.Errorf("BinderType: got %q, want %q", b.BinderType, tt.wantBinderType)
+			}
+		})
+	}
+}
+
 func TestReadAndMergeMavenPlaceholders(t *testing.T) {
 	content := []byte(`
 app:
