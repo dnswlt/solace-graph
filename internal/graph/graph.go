@@ -37,14 +37,15 @@ func (a *Application) Sort() {
 
 // BindingMatch describes a specific link between the current application and another one.
 type BindingMatch struct {
-	Local  spring.StreamBinding `json:"local"`  // binding of the node's application
-	Remote spring.StreamBinding `json:"remote"` // binding of the other application
+	Direction string               `json:"direction"` // "from" if remote produces, "to" if local produces
+	Local     spring.StreamBinding `json:"local"`     // binding of the node's application
+	Remote    spring.StreamBinding `json:"remote"`    // binding of the other application
 }
 
 // Edge represents a dependency on another application, including the reason (matching bindings).
 type Edge struct {
 	To        string         `json:"to"`
-	Direction string         `json:"direction"` // "from" if we consume from them, "to" if we produce for them
+	Direction string         `json:"direction"` // "from", "to", or "both"
 	Matches   []BindingMatch `json:"matches"`
 }
 
@@ -106,16 +107,16 @@ func Build(apps []Application) []Node {
 				continue
 			}
 
+			var fromEdge, toEdge *Edge
+
 			// Current app consumes FROM other app (pa.in matches other.out)
 			for _, inB := range pa.in {
 				for _, outB := range other.out {
 					if spring.MatchLevels(inB.levels, outB.levels) {
-						e, ok := edgeMap[other.app.Name]
-						if !ok {
-							e = &Edge{To: other.app.Name, Direction: "from"}
-							edgeMap[other.app.Name] = e
+						if fromEdge == nil {
+							fromEdge = &Edge{To: other.app.Name, Direction: "from"}
 						}
-						e.Matches = append(e.Matches, BindingMatch{Local: inB.binding, Remote: outB.binding})
+						fromEdge.Matches = append(fromEdge.Matches, BindingMatch{Direction: "from", Local: inB.binding, Remote: outB.binding})
 					}
 				}
 			}
@@ -124,14 +125,23 @@ func Build(apps []Application) []Node {
 			for _, outB := range pa.out {
 				for _, inB := range other.in {
 					if spring.MatchLevels(inB.levels, outB.levels) {
-						e, ok := edgeMap[other.app.Name]
-						if !ok {
-							e = &Edge{To: other.app.Name, Direction: "to"}
-							edgeMap[other.app.Name] = e
+						if toEdge == nil {
+							toEdge = &Edge{To: other.app.Name, Direction: "to"}
 						}
-						e.Matches = append(e.Matches, BindingMatch{Local: outB.binding, Remote: inB.binding})
+						toEdge.Matches = append(toEdge.Matches, BindingMatch{Direction: "to", Local: outB.binding, Remote: inB.binding})
 					}
 				}
+			}
+
+			switch {
+			case fromEdge != nil && toEdge != nil:
+				fromEdge.Direction = "both"
+				fromEdge.Matches = append(fromEdge.Matches, toEdge.Matches...)
+				edgeMap[other.app.Name] = fromEdge
+			case fromEdge != nil:
+				edgeMap[other.app.Name] = fromEdge
+			case toEdge != nil:
+				edgeMap[other.app.Name] = toEdge
 			}
 		}
 

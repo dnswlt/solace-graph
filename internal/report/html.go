@@ -326,7 +326,9 @@ const htmlTemplate = `
                             <td><a href="#{{.To}}" class="rel-app-name">{{.To}}</a></td>
                             <td>
                                 <div class="rel-summary">
-                                    {{if eq $dir "from"}}
+                                    {{if eq $dir "both"}}
+                                        Bidirectional
+                                    {{else if eq $dir "from"}}
                                         Remote &rarr; Local
                                     {{else}}
                                         Local &rarr; Remote
@@ -344,7 +346,7 @@ const htmlTemplate = `
                                                 <div style="flex: 1; border-left: 1px solid var(--border-color); margin-top: 2px;"></div>
                                             </div>
                                             <div class="match-endpoints">
-                                                {{if eq $dir "from"}}
+                                                {{if eq .Direction "from"}}
                                                 <div class="endpoint">
                                                     <span class="endpoint-label">Producer (Remote)</span>
                                                     <span class="topic">{{.Remote.Destination}}</span>
