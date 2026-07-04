@@ -20,9 +20,7 @@ var skipDirs = map[string]bool{
 // pom.xml), together with the YAML resource files found under src/main/resources.
 type Module struct {
 	Dir          string       // directory containing the module's pom.xml
-	GroupId      string       // effective groupId (falls back to parent)
-	ArtifactId   string       // artifactId
-	Version      string       // effective version (falls back to parent)
+	GAV                       // effective coordinates (group/version fall back to parent)
 	Dependencies []Dependency // declared <dependencies>
 
 	// ResourcesDir is the module's src/main/resources directory, or "" if absent.
@@ -97,10 +95,12 @@ func loadModule(pomPath string) (*Module, error) {
 	}
 	dir := filepath.Dir(pomPath)
 	m := &Module{
-		Dir:          dir,
-		GroupId:      pom.GetGroupId(),
-		ArtifactId:   pom.ArtifactId,
-		Version:      pom.GetVersion(),
+		Dir: dir,
+		GAV: GAV{
+			GroupId:    pom.GetGroupId(),
+			ArtifactId: pom.ArtifactId,
+			Version:    pom.GetVersion(),
+		},
 		Dependencies: pom.Dependencies,
 	}
 

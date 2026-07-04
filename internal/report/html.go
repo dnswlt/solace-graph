@@ -294,19 +294,21 @@ const htmlTemplate = `
             <h3>Applications</h3>
             <ul id="nav-list">
             {{range .Nodes}}
-                <li data-name="{{.App.Name}}"><a href="#{{.App.Name}}">{{.App.Name}}</a></li>
+                <li data-name="{{.App.GAV.ArtifactId}}"><a href="#{{.App.GAV.ArtifactId}}">{{.App.GAV.ArtifactId}}</a></li>
             {{end}}
             </ul>
         </nav>
 
         <div id="apps-container">
         {{range .Nodes}}
-        <div class="app-card" id="{{.App.Name}}" data-name="{{.App.Name}}">
+        <div class="app-card" id="{{.App.GAV.ArtifactId}}" data-name="{{.App.GAV.ArtifactId}}">
             <div class="app-header">
-                <h2>{{.App.Name}}{{if .App.Version}} <span style="font-weight: normal; color: var(--text-muted); font-size: 1rem;">v{{.App.Version}}</span>{{end}}</h2>
+                <h2>{{.App.GAV.ArtifactId}}{{if .App.GAV.Version}} <span style="font-weight: normal; color: var(--text-muted); font-size: 1rem;">v{{.App.GAV.Version}}</span>{{end}}</h2>
+                {{if .App.GAV.GroupId}}
                 <div class="app-meta">
-                    Discovered via <span class="discovery-tag">{{.App.Discovery}}</span>
+                    <span class="discovery-tag">{{.App.GAV.GroupId}}</span>
                 </div>
+                {{end}}
             </div>
 
             <div class="files-list">

@@ -7,9 +7,9 @@ import (
 
 // GAV represents the Group, Artifact, and Version coordinates.
 type GAV struct {
-	GroupId    string `xml:"groupId"`
-	ArtifactId string `xml:"artifactId"`
-	Version    string `xml:"version"`
+	GroupId    string `xml:"groupId" json:"groupId"`
+	ArtifactId string `xml:"artifactId" json:"artifactId"`
+	Version    string `xml:"version" json:"version,omitempty"`
 }
 
 // Dependency represents a single <dependency> entry on a project's classpath.

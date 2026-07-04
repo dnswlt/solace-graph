@@ -4,25 +4,22 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/dnswlt/solace-graph/internal/maven"
 	"github.com/dnswlt/solace-graph/internal/spring"
 )
 
 // Application represents a set of bindings discovered in one or more files.
+// Its GAV (Maven groupId/artifactId/version) identifies the application when
+// matching against other data.
 type Application struct {
-	Name      string                 `json:"name"`
-	Version   string                 `json:"version,omitempty"`
-	Discovery string                 `json:"discovery"` // how the name was determined (e.g., "pom.xml" or "folder-name")
-	Files     []string               `json:"files"`     // all source files for this application
-	Bindings  []spring.StreamBinding `json:"bindings"`  // all bindings
+	GAV      maven.GAV              `json:"gav"`
+	Files    []string               `json:"files"`    // all source files for this application
+	Bindings []spring.StreamBinding `json:"bindings"` // all bindings
 }
 
-// Merge consolidates the data from another application instance into this one.
-// It prefers more specific discovery methods (like "pom.xml") and appends unique files and bindings.
+// Merge consolidates the data from another application instance into this one by
+// appending its files and bindings.
 func (a *Application) Merge(other *Application) {
-	if a.Discovery == "folder-name" && other.Discovery == "pom.xml" {
-		a.Discovery = "pom.xml"
-		a.Version = other.Version
-	}
 	a.Files = append(a.Files, other.Files...)
 	a.Bindings = append(a.Bindings, other.Bindings...)
 }
@@ -70,10 +67,10 @@ type preparedApp struct {
 // Build constructs the dependency graph from a list of discovered applications.
 // A dependency (edge) exists from application A to B if A has a Solace input binding
 // that matches a Solace output binding of B.
-// It assumes that the input list contains unique applications by name.
+// It assumes that the input list contains unique applications by GAV.
 func Build(apps []Application) []Node {
 	sort.Slice(apps, func(i, j int) bool {
-		return apps[i].Name < apps[j].Name
+		return apps[i].GAV.ArtifactId < apps[j].GAV.ArtifactId
 	})
 
 	prepared := make([]preparedApp, len(apps))
@@ -103,7 +100,7 @@ func Build(apps []Application) []Node {
 		edgeMap := make(map[string]*Edge)
 
 		for _, other := range prepared {
-			if pa.app.Name == other.app.Name {
+			if pa.app.GAV == other.app.GAV {
 				continue
 			}
 
@@ -114,7 +111,7 @@ func Build(apps []Application) []Node {
 				for _, outB := range other.out {
 					if spring.MatchLevels(inB.levels, outB.levels) {
 						if fromEdge == nil {
-							fromEdge = &Edge{To: other.app.Name, Direction: "from"}
+							fromEdge = &Edge{To: other.app.GAV.ArtifactId, Direction: "from"}
 						}
 						fromEdge.Matches = append(fromEdge.Matches, BindingMatch{Direction: "from", Local: inB.binding, Remote: outB.binding})
 					}
@@ -126,7 +123,7 @@ func Build(apps []Application) []Node {
 				for _, inB := range other.in {
 					if spring.MatchLevels(inB.levels, outB.levels) {
 						if toEdge == nil {
-							toEdge = &Edge{To: other.app.Name, Direction: "to"}
+							toEdge = &Edge{To: other.app.GAV.ArtifactId, Direction: "to"}
 						}
 						toEdge.Matches = append(toEdge.Matches, BindingMatch{Direction: "to", Local: outB.binding, Remote: inB.binding})
 					}
@@ -137,11 +134,11 @@ func Build(apps []Application) []Node {
 			case fromEdge != nil && toEdge != nil:
 				fromEdge.Direction = "both"
 				fromEdge.Matches = append(fromEdge.Matches, toEdge.Matches...)
-				edgeMap[other.app.Name] = fromEdge
+				edgeMap[other.app.GAV.ArtifactId] = fromEdge
 			case fromEdge != nil:
-				edgeMap[other.app.Name] = fromEdge
+				edgeMap[other.app.GAV.ArtifactId] = fromEdge
 			case toEdge != nil:
-				edgeMap[other.app.Name] = toEdge
+				edgeMap[other.app.GAV.ArtifactId] = toEdge
 			}
 		}
 

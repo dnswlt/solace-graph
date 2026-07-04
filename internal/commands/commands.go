@@ -25,8 +25,8 @@ func (f *multiFlag) String() string     { return strings.Join(*f, ", ") }
 func (f *multiFlag) Set(s string) error { *f = append(*f, s); return nil }
 
 // Collect extracts bindings from all Spring application contexts found under the given
-// roots and writes them as JSON to out.
-// It merges multiple files belonging to the same application (e.g. same pom.xml or folder).
+// roots and writes them as JSON to out. Each Maven module (identified by its GAV)
+// contributes one application; modules sharing a GAV are merged.
 func Collect(out io.Writer, args []string) error {
 	fs := flag.NewFlagSet("collect", flag.ContinueOnError)
 	var excludeProfileFlags multiFlag
@@ -64,7 +64,7 @@ func Collect(out io.Writer, args []string) error {
 	}
 
 	appMap := make(map[string]*graph.Application)
-	var names []string
+	var keys []string
 
 	for _, m := range mods.All {
 		if m.ResourcesDir == "" {
@@ -86,25 +86,23 @@ func Collect(out io.Writer, args []string) error {
 		spring.LogUnresolvedPlaceholders(m.ResourcesDir, bindings)
 
 		newApp := &graph.Application{
-			Name:      m.ArtifactId,
-			Version:   m.Version,
-			Discovery: "pom.xml",
-			Files:     []string{m.ResourcesDir},
-			Bindings:  bindings,
+			GAV:      m.GAV,
+			Files:    []string{m.ResourcesDir},
+			Bindings: bindings,
 		}
 
-		if app, ok := appMap[m.ArtifactId]; !ok {
-			appMap[m.ArtifactId] = newApp
-			names = append(names, m.ArtifactId)
+		if app, ok := appMap[m.Key()]; !ok {
+			appMap[m.Key()] = newApp
+			keys = append(keys, m.Key())
 		} else {
 			app.Merge(newApp)
 		}
 	}
 
-	sort.Strings(names)
+	sort.Strings(keys)
 	var apps []graph.Application
-	for _, name := range names {
-		app := appMap[name]
+	for _, key := range keys {
+		app := appMap[key]
 		app.Sort()
 		apps = append(apps, *app)
 	}
