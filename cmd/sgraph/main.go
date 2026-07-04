@@ -56,5 +56,5 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "\nCommands:\n")
 	fmt.Fprintf(os.Stderr, "  collect [-exclude-profile <regex>]... <root> [<root>...]   Extract bindings and map to applications\n")
 	fmt.Fprintf(os.Stderr, "  graph [-html <report.html>] <file> [<file>...]              Build dependency graph from collected bindings\n")
-	fmt.Fprintf(os.Stderr, "  swcat [-url <swcat-url>] <file> [<file>...]                  Match collected applications against swcat catalog entities\n")
+	fmt.Fprintf(os.Stderr, "  swcat [-url <swcat-url>] [-post] <file> [<file>...]          Report observed dependencies between matched components to swcat\n")
 }

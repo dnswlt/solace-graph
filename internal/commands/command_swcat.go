@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"sort"
 
 	"github.com/dnswlt/solace-graph/internal/graph"
 	"github.com/dnswlt/solace-graph/internal/swcat"
@@ -13,16 +12,21 @@ import (
 
 // Swcat matches swcat catalog Component entities against the Applications
 // collected from the Maven/Spring sources (as produced by the `collect`
-// command) and reports the matches. Later it will upload the identified
-// dependencies to swcat as observations.
+// command), derives the dependencies between matched Components from the
+// Spring Cloud Stream bindings, and reports them to swcat as observed
+// dependencies (one POST per source Component).
+//
+// By default it runs as a dry run, printing what it would upload. Pass -post to
+// actually send the observations.
 func Swcat(out io.Writer, args []string) error {
 	fs := flag.NewFlagSet("swcat", flag.ContinueOnError)
 	url := fs.String("url", "http://localhost:9191", "base URL of the swcat server")
+	post := fs.Bool("post", false, "upload the observed dependencies to swcat (default: dry run)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() < 1 {
-		return fmt.Errorf("usage: swcat [-url <swcat-url>] <file> [<file>...]")
+		return fmt.Errorf("usage: swcat [-url <swcat-url>] [-post] <file> [<file>...]")
 	}
 
 	var apps []graph.Application
@@ -34,42 +38,50 @@ func Swcat(out io.Writer, args []string) error {
 		apps = append(apps, a...)
 	}
 
-	entities, err := swcat.NewClient(*url).Entities()
+	client := swcat.NewClient(*url)
+	entities, err := client.Entities()
 	if err != nil {
 		return err
 	}
 	slog.Info("retrieved catalog entities", "count", len(entities), "url", *url)
 
 	res := swcat.MatchComponents(entities, apps)
-	sort.Slice(res.Matches, func(i, j int) bool {
-		return res.Matches[i].GroupID+":"+res.Matches[i].ArtifactID <
-			res.Matches[j].GroupID+":"+res.Matches[j].ArtifactID
-	})
-	sort.Slice(res.UnmatchedApps, func(i, j int) bool {
-		a, b := res.UnmatchedApps[i].GAV, res.UnmatchedApps[j].GAV
-		return a.GroupId+":"+a.ArtifactId < b.GroupId+":"+b.ArtifactId
-	})
-
-	// Matched: a catalog Component and a collected Application share coordinates.
 	var matched int
 	for _, m := range res.Matches {
 		if m.App != nil {
 			matched++
-			fmt.Fprintf(out, "MATCH        %s:%s\n", m.GroupID, m.ArtifactID)
 		}
 	}
-	// Catalog-only: Component exists in the catalog, but no Application was collected.
-	for _, m := range res.Matches {
-		if m.App == nil {
-			fmt.Fprintf(out, "catalog-only %s:%s\n", m.GroupID, m.ArtifactID)
+	fmt.Fprintf(out, "%d matched, %d catalog-only, %d app-only (%d components ignored: no groupId)\n",
+		matched, len(res.Matches)-matched, len(res.UnmatchedApps), res.Ignored)
+
+	obs := swcat.ObservedDependencies(res)
+	var withDeps, totalDeps int
+	for _, od := range obs {
+		if n := len(od.GetDependencies()); n > 0 {
+			withDeps++
+			totalDeps += n
+			fmt.Fprintf(out, "  %s: %s\n", od.GetSource().GetName(), swcat.Summary(od))
 		}
 	}
-	// App-only: Application was collected, but no matching Component in the catalog.
-	for _, app := range res.UnmatchedApps {
-		fmt.Fprintf(out, "app-only     %s:%s\n", app.GAV.GroupId, app.GAV.ArtifactId)
+	fmt.Fprintf(out, "%d source components with dependencies, %d observed dependencies total (%d source messages)\n",
+		withDeps, totalDeps, len(obs))
+
+	if !*post {
+		fmt.Fprintf(out, "\ndry run: pass -post to upload to %s\n", *url)
+		return nil
 	}
 
-	fmt.Fprintf(out, "\n%d matched, %d catalog-only, %d app-only (%d components ignored: no groupId)\n",
-		matched, len(res.Matches)-matched, len(res.UnmatchedApps), res.Ignored)
+	var failed int
+	for _, od := range obs {
+		if err := client.PostObservedDependencies(od); err != nil {
+			slog.Error("failed to post observed dependencies", "source", od.GetSource().GetName(), "err", err)
+			failed++
+		}
+	}
+	fmt.Fprintf(out, "\nposted %d/%d source messages to %s\n", len(obs)-failed, len(obs), *url)
+	if failed > 0 {
+		return fmt.Errorf("%d of %d posts failed", failed, len(obs))
+	}
 	return nil
 }

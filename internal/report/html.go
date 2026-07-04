@@ -325,7 +325,7 @@ const htmlTemplate = `
                     {{range .Edges}}
                         {{$dir := .Direction}}
                         <tr class="rel-row">
-                            <td><a href="#{{.To}}" class="rel-app-name">{{.To}}</a></td>
+                            <td><a href="#{{.To.ArtifactId}}" class="rel-app-name">{{.To.ArtifactId}}</a></td>
                             <td>
                                 <div class="rel-summary">
                                     {{if eq $dir "both"}}

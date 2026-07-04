@@ -33,7 +33,7 @@ type BindingMatch struct {
 
 // Edge represents a dependency on another application, including the reason (matching bindings).
 type Edge struct {
-	To        string         `json:"to"`
+	To        maven.GAV      `json:"to"`        // GAV of the depended-on application
 	Direction string         `json:"direction"` // "from", "to", or "both"
 	Matches   []BindingMatch `json:"matches"`
 }
@@ -95,7 +95,7 @@ func Build(apps []Application) []Node {
 
 	var nodes []Node
 	for _, pa := range prepared {
-		edgeMap := make(map[string]*Edge)
+		edgeMap := make(map[maven.GAV]*Edge)
 
 		for _, other := range prepared {
 			if pa.app.GAV == other.app.GAV {
@@ -109,7 +109,7 @@ func Build(apps []Application) []Node {
 				for _, outB := range other.out {
 					if inB.syntax == outB.syntax && spring.MatchLevels(inB.levels, outB.levels) {
 						if fromEdge == nil {
-							fromEdge = &Edge{To: other.app.GAV.ArtifactId, Direction: "from"}
+							fromEdge = &Edge{To: other.app.GAV, Direction: "from"}
 						}
 						fromEdge.Matches = append(fromEdge.Matches, BindingMatch{Direction: "from", Local: inB.binding, Remote: outB.binding})
 					}
@@ -121,7 +121,7 @@ func Build(apps []Application) []Node {
 				for _, inB := range other.in {
 					if inB.syntax == outB.syntax && spring.MatchLevels(inB.levels, outB.levels) {
 						if toEdge == nil {
-							toEdge = &Edge{To: other.app.GAV.ArtifactId, Direction: "to"}
+							toEdge = &Edge{To: other.app.GAV, Direction: "to"}
 						}
 						toEdge.Matches = append(toEdge.Matches, BindingMatch{Direction: "to", Local: outB.binding, Remote: inB.binding})
 					}
@@ -132,11 +132,11 @@ func Build(apps []Application) []Node {
 			case fromEdge != nil && toEdge != nil:
 				fromEdge.Direction = "both"
 				fromEdge.Matches = append(fromEdge.Matches, toEdge.Matches...)
-				edgeMap[other.app.GAV.ArtifactId] = fromEdge
+				edgeMap[other.app.GAV] = fromEdge
 			case fromEdge != nil:
-				edgeMap[other.app.GAV.ArtifactId] = fromEdge
+				edgeMap[other.app.GAV] = fromEdge
 			case toEdge != nil:
-				edgeMap[other.app.GAV.ArtifactId] = toEdge
+				edgeMap[other.app.GAV] = toEdge
 			}
 		}
 
@@ -152,7 +152,10 @@ func Build(apps []Application) []Node {
 			edges = append(edges, *e)
 		}
 		sort.Slice(edges, func(i, j int) bool {
-			return edges[i].To < edges[j].To
+			if edges[i].To.GroupId != edges[j].To.GroupId {
+				return edges[i].To.GroupId < edges[j].To.GroupId
+			}
+			return edges[i].To.ArtifactId < edges[j].To.ArtifactId
 		})
 
 		nodes = append(nodes, Node{
