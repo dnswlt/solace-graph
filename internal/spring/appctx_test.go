@@ -304,6 +304,57 @@ func TestMatchTopics(t *testing.T) {
 	}
 }
 
+func TestTopicSyntaxFor(t *testing.T) {
+	tests := []struct {
+		name       string
+		binderType string
+		dest       string
+		want       TopicSyntax
+	}{
+		{"solace binder", "solace", "a/b/c", SyntaxSolace},
+		{"kafka binder", "kafka", "a.b.c", SyntaxDotted},
+		{"kafka binder, slash in topic still dotted", "kafka", "a/b", SyntaxDotted},
+		{"tibrv binder", "tibrv", "a.b.c", SyntaxDotted},
+		{"tibco binder", "tibco-rv", "a.b.c", SyntaxDotted},
+		{"unknown binder, slash -> solace", "", "a/b/c", SyntaxSolace},
+		{"unknown binder, dot -> dotted", "", "a.b.c", SyntaxDotted},
+		{"unknown binder, no separator -> unknown", "", "abc", SyntaxUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := StreamBinding{BinderType: tt.binderType, Destination: tt.dest}
+			if got := TopicSyntaxFor(b); got != tt.want {
+				t.Errorf("TopicSyntaxFor(%+v) = %v, want %v", b, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatchDottedTopics(t *testing.T) {
+	tests := []struct {
+		name     string
+		consumer string
+		producer string
+		want     bool
+	}{
+		{"exact match", "orders.created.v1", "orders.created.v1", true},
+		{"mismatch", "orders.created.v1", "orders.updated.v1", false},
+		{"single-word topic", "orders", "orders", true},
+		{"different lengths", "orders.created", "orders.created.v1", false},
+		{"unresolved placeholder acts as wildcard", "orders.${region}.v1", "orders.emea.v1", true},
+		{"slash is not a separator", "orders/created", "orders/created", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := TopicLevels(tt.consumer, SyntaxDotted)
+			p := TopicLevels(tt.producer, SyntaxDotted)
+			if got := c != nil && p != nil && MatchLevels(c, p); got != tt.want {
+				t.Errorf("dotted match(%q, %q) = %v, want %v", tt.consumer, tt.producer, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestStreamBindingsBinderType(t *testing.T) {
 	tests := []struct {
 		name           string

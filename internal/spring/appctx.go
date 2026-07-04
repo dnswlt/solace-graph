@@ -364,25 +364,69 @@ func StreamBindings(props map[string]string) []StreamBinding {
 	return bindings
 }
 
+// TopicSyntax describes how a binder technology structures its topic strings.
+type TopicSyntax int
+
+const (
+	// SyntaxUnknown means the topic structure could not be determined; such bindings
+	// are not matched.
+	SyntaxUnknown TopicSyntax = iota
+	// SyntaxSolace uses '/' level separators and the '*' (single level) and '>'
+	// (multi level) wildcards.
+	SyntaxSolace
+	// SyntaxDotted uses '.' level separators and no wildcards (e.g. Kafka, TIBCO RV).
+	SyntaxDotted
+)
+
+// separator returns the topic level separator for the syntax.
+func (s TopicSyntax) separator() string {
+	if s == SyntaxDotted {
+		return "."
+	}
+	return "/"
+}
+
+// TopicSyntaxFor determines a binding's topic syntax from its binder technology,
+// falling back to the shape of the destination when the binder type is unknown.
+func TopicSyntaxFor(b StreamBinding) TopicSyntax {
+	switch bt := strings.ToLower(b.BinderType); {
+	case strings.Contains(bt, "solace"):
+		return SyntaxSolace
+	case strings.Contains(bt, "kafka"), strings.Contains(bt, "tibrv"), strings.Contains(bt, "tibco"):
+		return SyntaxDotted
+	}
+	// Unknown binder: infer from the destination's structure.
+	switch {
+	case strings.Contains(b.Destination, "/"):
+		return SyntaxSolace
+	case strings.Contains(b.Destination, "."):
+		return SyntaxDotted
+	default:
+		return SyntaxUnknown
+	}
+}
+
 // MatchTopics compares a consumer topic (which may contain Solace wildcards '*' or '>')
-// against a producer topic. Both topics may contain unresolved properties (e.g., "${...}"),
-// which are treated equivalently to a single-level '*' wildcard.
+// against a producer topic, using Solace topic syntax. Both topics may contain
+// unresolved properties (e.g., "${...}"), which are treated equivalently to a
+// single-level '*' wildcard.
 // Bindings containing Spring Cloud Stream Request/Reply variables like
 // ${replyTopicWithWildcards|...} are ignored and will never match.
 func MatchTopics(consumerTopic, producerTopic string) bool {
-	cLevels := TopicLevels(consumerTopic)
-	pLevels := TopicLevels(producerTopic)
+	cLevels := TopicLevels(consumerTopic, SyntaxSolace)
+	pLevels := TopicLevels(producerTopic, SyntaxSolace)
 	if cLevels == nil || pLevels == nil {
 		return false
 	}
 	return MatchLevels(cLevels, pLevels)
 }
 
-// TopicLevels normalizes a topic (placeholders to '*') and splits it into levels.
+// TopicLevels normalizes a topic (placeholders to '*') and splits it into levels
+// using the given syntax's separator.
 // It returns nil if the topic contains a Request/Reply variable, or if the topic
 // consists entirely of unresolved placeholders with no literal structure — in that
 // case we have no information about topic shape and matching would produce false positives.
-func TopicLevels(topic string) []string {
+func TopicLevels(topic string, syntax TopicSyntax) []string {
 	if strings.Contains(topic, "${replyTopicWithWildcards|") {
 		return nil
 	}
@@ -390,7 +434,7 @@ func TopicLevels(topic string) []string {
 		return nil
 	}
 	normalized := placeholderRe.ReplaceAllString(topic, "*")
-	return strings.Split(normalized, "/")
+	return strings.Split(normalized, syntax.separator())
 }
 
 // MatchLevels compares consumer topic levels against producer topic levels.

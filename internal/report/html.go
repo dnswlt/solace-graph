@@ -283,7 +283,7 @@ const htmlTemplate = `
 <body>
     <div class="container">
         <header>
-            <h1>Solace Dependency Graph</h1>
+            <h1>Messaging Dependency Graph</h1>
         </header>
 
         <div class="filter-box">
@@ -318,7 +318,7 @@ const htmlTemplate = `
             </div>
 
             <div style="margin-top: 1.5rem;">
-                <h3>Solace Relationships</h3>
+                <h3>Messaging Relationships</h3>
                 {{if .Edges}}
                 <table class="rel-table">
                     <tbody>
@@ -382,7 +382,7 @@ const htmlTemplate = `
                     </tbody>
                 </table>
                 {{else}}
-                <p style="color: var(--text-muted); font-size: 0.85rem;">No Solace relationships discovered.</p>
+                <p style="color: var(--text-muted); font-size: 0.85rem;">No messaging relationships discovered.</p>
                 {{end}}
             </div>
 

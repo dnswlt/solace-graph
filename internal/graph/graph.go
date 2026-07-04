@@ -2,7 +2,6 @@ package graph
 
 import (
 	"sort"
-	"strings"
 
 	"github.com/dnswlt/solace-graph/internal/maven"
 	"github.com/dnswlt/solace-graph/internal/spring"
@@ -54,19 +53,20 @@ type Node struct {
 
 type preparedBinding struct {
 	binding spring.StreamBinding
+	syntax  spring.TopicSyntax
 	levels  []string
 }
 
 type preparedApp struct {
-	app      Application
-	in       []preparedBinding
-	out      []preparedBinding
-	bindings []preparedBinding
+	app Application
+	in  []preparedBinding
+	out []preparedBinding
 }
 
 // Build constructs the dependency graph from a list of discovered applications.
-// A dependency (edge) exists from application A to B if A has a Solace input binding
-// that matches a Solace output binding of B.
+// A dependency (edge) exists from application A to B if A has an input binding whose
+// topic matches an output binding of B on the same binder technology (Solace, Kafka,
+// TIBCO RV, ...); bindings of different technologies never match.
 // It assumes that the input list contains unique applications by GAV.
 func Build(apps []Application) []Node {
 	sort.Slice(apps, func(i, j int) bool {
@@ -77,14 +77,19 @@ func Build(apps []Application) []Node {
 	for i, app := range apps {
 		pa := preparedApp{app: app}
 		for _, b := range app.Bindings {
-			if !isSolace(b) {
+			syntax := spring.TopicSyntaxFor(b)
+			if syntax == spring.SyntaxUnknown {
 				continue
+			}
+			levels := spring.TopicLevels(b.Destination, syntax)
+			if levels == nil {
+				continue // reply-topic variable or fully-unresolved destination
 			}
 			pb := preparedBinding{
 				binding: b,
-				levels:  spring.TopicLevels(b.Destination),
+				syntax:  syntax,
+				levels:  levels,
 			}
-			pa.bindings = append(pa.bindings, pb)
 			switch b.Direction {
 			case spring.BindingIn:
 				pa.in = append(pa.in, pb)
@@ -109,7 +114,7 @@ func Build(apps []Application) []Node {
 			// Current app consumes FROM other app (pa.in matches other.out)
 			for _, inB := range pa.in {
 				for _, outB := range other.out {
-					if spring.MatchLevels(inB.levels, outB.levels) {
+					if inB.syntax == outB.syntax && spring.MatchLevels(inB.levels, outB.levels) {
 						if fromEdge == nil {
 							fromEdge = &Edge{To: other.app.GAV.ArtifactId, Direction: "from"}
 						}
@@ -121,7 +126,7 @@ func Build(apps []Application) []Node {
 			// Current app produces TO other app (pa.out matches other.in)
 			for _, outB := range pa.out {
 				for _, inB := range other.in {
-					if spring.MatchLevels(inB.levels, outB.levels) {
+					if inB.syntax == outB.syntax && spring.MatchLevels(inB.levels, outB.levels) {
 						if toEdge == nil {
 							toEdge = &Edge{To: other.app.GAV.ArtifactId, Direction: "to"}
 						}
@@ -164,12 +169,4 @@ func Build(apps []Application) []Node {
 	}
 
 	return nodes
-}
-
-func isSolace(b spring.StreamBinding) bool {
-	if strings.Contains(b.BinderType, "solace") {
-		return true
-	}
-	// Heuristic: Solace topics typically use '/', while Kafka topics use '.'.
-	return strings.Contains(b.Destination, "/")
 }
