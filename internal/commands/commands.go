@@ -21,7 +21,7 @@ import (
 // multiFlag is a flag.Value that accumulates repeated string flags.
 type multiFlag []string
 
-func (f *multiFlag) String() string  { return strings.Join(*f, ", ") }
+func (f *multiFlag) String() string     { return strings.Join(*f, ", ") }
 func (f *multiFlag) Set(s string) error { *f = append(*f, s); return nil }
 
 // Collect extracts bindings from all Spring application contexts found under the given
@@ -58,30 +58,44 @@ func Collect(out io.Writer, args []string) error {
 		excludeApps[i] = re
 	}
 
-	result, err := spring.FindStreamBindings(fs.Args(), excludeProfiles)
+	mods, err := maven.Scan(fs.Args())
 	if err != nil {
-		return fmt.Errorf("FindStreamBindings: %v", err)
+		return fmt.Errorf("maven.Scan: %v", err)
 	}
 
 	appMap := make(map[string]*graph.Application)
 	var names []string
 
-	for path, bindings := range result {
-		name, version, discovery := findApplicationName(path)
-		if matchesAny(excludeApps, name) {
+	for _, m := range mods.All {
+		if m.ResourcesDir == "" {
+			continue // aggregator/library module with no application context
+		}
+		if matchesAny(excludeApps, m.ArtifactId) {
 			continue
 		}
+
+		resolve := func(location string) (string, bool) { return mods.ResolveResource(m, location) }
+		props, err := spring.ReadApplicationProperties(m.ResourcesDir, resolve, excludeProfiles)
+		if err != nil {
+			return fmt.Errorf("reading application properties for %s: %v", m.Key(), err)
+		}
+		bindings := spring.StreamBindings(props)
+		if len(bindings) == 0 {
+			continue
+		}
+		spring.LogUnresolvedPlaceholders(m.ResourcesDir, bindings)
+
 		newApp := &graph.Application{
-			Name:      name,
-			Version:   version,
-			Discovery: discovery,
-			Files:     []string{path},
+			Name:      m.ArtifactId,
+			Version:   m.Version,
+			Discovery: "pom.xml",
+			Files:     []string{m.ResourcesDir},
 			Bindings:  bindings,
 		}
 
-		if app, ok := appMap[name]; !ok {
-			appMap[name] = newApp
-			names = append(names, name)
+		if app, ok := appMap[m.ArtifactId]; !ok {
+			appMap[m.ArtifactId] = newApp
+			names = append(names, m.ArtifactId)
 		} else {
 			app.Merge(newApp)
 		}
@@ -177,24 +191,4 @@ func matchesAny(patterns []*regexp.Regexp, s string) bool {
 		}
 	}
 	return false
-}
-
-func findApplicationName(path string) (name string, version string, discovery string) {
-	// If the file lives under src/main/resources, try to find a pom.xml in the module root.
-	relPath := filepath.Join("src", "main", "resources")
-	if idx := strings.LastIndex(path, relPath); idx != -1 {
-		// Ensure it's either at the start or preceded by a path separator to avoid partial matches
-		if idx == 0 || os.IsPathSeparator(path[idx-1]) {
-			moduleRoot := path[:idx]
-			pomPath := filepath.Join(moduleRoot, "pom.xml")
-			if pom, err := maven.Load(pomPath); err == nil {
-				if pom.ArtifactId != "" {
-					return pom.ArtifactId, pom.GetVersion(), "pom.xml"
-				}
-			}
-		}
-	}
-
-	// Fallback: use the parent folder name as the application name
-	return filepath.Base(filepath.Dir(path)), "", "folder-name"
 }

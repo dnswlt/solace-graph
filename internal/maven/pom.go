@@ -12,11 +12,22 @@ type GAV struct {
 	Version    string `xml:"version"`
 }
 
+// Dependency represents a single <dependency> entry on a project's classpath.
+// The Version is read for completeness but plays no role in module identity, which
+// is keyed on GroupId:ArtifactId only.
+type Dependency struct {
+	GroupId    string `xml:"groupId"`
+	ArtifactId string `xml:"artifactId"`
+	Version    string `xml:"version"`
+	Scope      string `xml:"scope"`
+}
+
 // POM represents a Maven Project Object Model.
 type POM struct {
 	XMLName xml.Name `xml:"project"`
 	GAV
-	Parent GAV `xml:"parent"`
+	Parent       GAV          `xml:"parent"`
+	Dependencies []Dependency `xml:"dependencies>dependency"`
 }
 
 // GetGroupId returns the effective GroupId of the project,

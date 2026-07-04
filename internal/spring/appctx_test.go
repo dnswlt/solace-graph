@@ -118,12 +118,18 @@ application:
 		t.Fatal(err)
 	}
 
+	// Resolve imports by basename against the two known files, mimicking a classpath
+	// that contains both.
 	fileIndex := map[string]string{
 		"application.yml":          appYml,
 		"application-imported.yml": importedYml,
 	}
+	resolve := func(location string) (string, bool) {
+		p, ok := fileIndex[filepath.Base(location)]
+		return p, ok
+	}
 
-	props, err := ReadApplicationProperties(appYml, fileIndex, nil)
+	props, err := ReadApplicationProperties(appYml, resolve, nil)
 	if err != nil {
 		t.Fatalf("ReadApplicationProperties: %v", err)
 	}
@@ -300,10 +306,9 @@ func TestMatchTopics(t *testing.T) {
 
 func TestStreamBindingsBinderType(t *testing.T) {
 	tests := []struct {
-		name            string
-		props           map[string]string
-		wantBinder      string
-		wantBinderType  string
+		name           string
+		props          map[string]string
+		wantBinderType string
 	}{
 		{
 			name: "single-binder: name is the type",
@@ -311,7 +316,6 @@ func TestStreamBindingsBinderType(t *testing.T) {
 				"spring.cloud.stream.bindings.myBinding-in-0.destination": "some/topic",
 				"spring.cloud.stream.bindings.myBinding-in-0.binder":      "solace",
 			},
-			wantBinder:     "solace",
 			wantBinderType: "solace",
 		},
 		{
@@ -321,7 +325,6 @@ func TestStreamBindingsBinderType(t *testing.T) {
 				"spring.cloud.stream.bindings.myBinding-in-0.binder":      "solace-prod",
 				"spring.cloud.stream.binders.solace-prod.type":            "solace",
 			},
-			wantBinder:     "solace-prod",
 			wantBinderType: "solace",
 		},
 		{
@@ -331,7 +334,6 @@ func TestStreamBindingsBinderType(t *testing.T) {
 				"spring.cloud.stream.default-binder":                      "kafka-prod",
 				"spring.cloud.stream.binders.kafka-prod.type":             "kafka",
 			},
-			wantBinder:     "kafka-prod",
 			wantBinderType: "kafka",
 		},
 		{
@@ -339,7 +341,6 @@ func TestStreamBindingsBinderType(t *testing.T) {
 			props: map[string]string{
 				"spring.cloud.stream.bindings.myBinding-in-0.destination": "some/topic",
 			},
-			wantBinder:     "",
 			wantBinderType: "",
 		},
 	}
@@ -351,9 +352,6 @@ func TestStreamBindingsBinderType(t *testing.T) {
 				t.Fatalf("expected 1 binding, got %d", len(bindings))
 			}
 			b := bindings[0]
-			if b.Binder != tt.wantBinder {
-				t.Errorf("Binder: got %q, want %q", b.Binder, tt.wantBinder)
-			}
 			if b.BinderType != tt.wantBinderType {
 				t.Errorf("BinderType: got %q, want %q", b.BinderType, tt.wantBinderType)
 			}

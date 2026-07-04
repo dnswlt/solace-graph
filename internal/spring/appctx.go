@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"os"
 	"path"
@@ -36,19 +35,26 @@ const (
 
 // StreamBinding represents a Spring Cloud Stream binding with its destination and binder.
 type StreamBinding struct {
-	BindingName string           // full name, e.g. "yankeeDoodle-out-0"
-	Direction   BindingDirection // "in" or "out"
-	Destination string           // topic/queue name
-	Binder      string           // binder name, e.g. "kafka" or "solace"
-	BinderType  string           // binder type, e.g. "solace", "kafka", "rabbit"; equals Binder if not separately configured
+	BindingName string           `json:"bindingName"` // full name, e.g. "yankeeDoodle-out-0"
+	Direction   BindingDirection `json:"direction"`   // "in" or "out"
+	Destination string           `json:"destination"` // topic/queue name
+	BinderType  string           `json:"binderType"`  // binder technology, e.g. "solace", "kafka", "rabbit"
 }
+
+// ImportResolver resolves a spring.config.import location (with the optional:/classpath:/
+// file: prefixes already stripped, e.g. "application-imported.yml" or "config/shared.yml")
+// to the file path holding it. It returns ok=false if the location cannot be resolved.
+type ImportResolver func(location string) (path string, ok bool)
 
 // ReadApplicationProperties reads a directory or file as Spring application properties YAML.
 // For directories, all application[-*].yml files are read; profile-specific files whose
 // suffix matches any of the excludeProfiles regexes are skipped.
 //
+// spring.config.import locations are resolved via resolve (which may be nil to skip
+// imports entirely).
+//
 // It returns a mapping from flattened keys ("my.funny.property") to their values.
-func ReadApplicationProperties(path string, fileIndex map[string]string, excludeProfiles []*regexp.Regexp) (map[string]string, error) {
+func ReadApplicationProperties(path string, resolve ImportResolver, excludeProfiles []*regexp.Regexp) (map[string]string, error) {
 	result := make(map[string]string)
 	info, err := os.Stat(path)
 	if err != nil {
@@ -73,7 +79,7 @@ func ReadApplicationProperties(path string, fileIndex map[string]string, exclude
 		}
 	}
 
-	if err := processImports(result, fileIndex); err != nil {
+	if err := processImports(result, resolve); err != nil {
 		return nil, err
 	}
 
@@ -162,23 +168,29 @@ func flattenValue(v any, prefix string, result map[string]string) {
 	}
 }
 
-func processImports(result map[string]string, fileIndex map[string]string) error {
+// anImport is a parsed spring.config.import location.
+type anImport struct {
+	location string // resource location with prefixes stripped
+	optional bool   // true if declared with the "optional:" prefix
+}
+
+func processImports(result map[string]string, resolve ImportResolver) error {
+	if resolve == nil {
+		return nil
+	}
 	imported := make(map[string]bool)
 
 	for {
-		var toImport []string
+		var toImport []anImport
 		for k, v := range result {
-			if importKeyPattern.MatchString(k) {
-				for p := range strings.SplitSeq(v, ",") {
-					p = strings.TrimSpace(p)
-					p = strings.TrimPrefix(p, "optional:")
-					p = strings.TrimPrefix(p, "classpath:")
-					p = strings.TrimPrefix(p, "file:")
-
-					if p != "" && !imported[p] {
-						toImport = append(toImport, p)
-						imported[p] = true
-					}
+			if !importKeyPattern.MatchString(k) {
+				continue
+			}
+			for p := range strings.SplitSeq(v, ",") {
+				imp := parseImport(p)
+				if imp.location != "" && !imported[imp.location] {
+					toImport = append(toImport, imp)
+					imported[imp.location] = true
 				}
 			}
 		}
@@ -188,17 +200,33 @@ func processImports(result map[string]string, fileIndex map[string]string) error
 		}
 
 		for _, imp := range toImport {
-			basename := filepath.Base(imp)
-			if path, ok := fileIndex[basename]; ok {
-				if err := readAndMerge(path, result); err != nil {
-					slog.Warn("spring: skipping import", "import", imp, "err", err)
+			path, ok := resolve(imp.location)
+			if !ok {
+				if !imp.optional {
+					slog.Warn("spring: import not found on classpath", "import", imp.location)
 				}
-			} else {
-				slog.Warn("spring: import not found in file index", "import", imp)
+				continue
+			}
+			if err := readAndMerge(path, result); err != nil {
+				slog.Warn("spring: skipping import", "import", imp.location, "err", err)
 			}
 		}
 	}
 	return nil
+}
+
+// parseImport strips the optional:/classpath:/file: prefixes from a single
+// spring.config.import location and reports whether it was marked optional.
+func parseImport(p string) anImport {
+	p = strings.TrimSpace(p)
+	var optional bool
+	if s, ok := strings.CutPrefix(p, "optional:"); ok {
+		optional = true
+		p = s
+	}
+	p = strings.TrimPrefix(p, "classpath:")
+	p = strings.TrimPrefix(p, "file:")
+	return anImport{location: strings.TrimSpace(p), optional: optional}
 }
 
 // normalizeKey converts a Spring property key to a normalized form for relaxed binding.
@@ -243,14 +271,9 @@ func resolvePlaceholders(result map[string]string) {
 				// match is e.g. "${my.property:default}" -> key becomes "my.property:default"
 				key := match[2 : len(match)-1]
 
-				var defaultVal string
-				hasDefault := false
-
-				// Handle default values separated by ':'
+				// Strip any default value (separated by ':') before looking up the key.
 				if idx := strings.IndexByte(key, ':'); idx != -1 {
-					defaultVal = key[idx+1:]
 					key = key[:idx]
-					hasDefault = true
 				}
 
 				// Attempt to resolve the key, using relaxed binding to handle mismatching cases/dashes
@@ -258,12 +281,10 @@ func resolvePlaceholders(result map[string]string) {
 					return resolved
 				}
 
-				// If not found in properties, use default if provided
-				if hasDefault {
-					return defaultVal
-				}
-
-				// If no match and no default, leave the placeholder unchanged (might be an ENV var)
+				// Not found: leave the placeholder unchanged rather than substituting the
+				// default. A default is a compile-time fallback that rarely reflects the
+				// real deployed value; keeping it unresolved lets it be treated as a
+				// wildcard during topic matching instead of a misleading concrete value.
 				return match
 			})
 			if newV != v {
@@ -275,43 +296,10 @@ func resolvePlaceholders(result map[string]string) {
 	}
 }
 
-// findRepoRoots returns the paths of all git repositories under the given roots,
-// sorted longest-first so that nested repos match before their parent.
-func findRepoRoots(roots []string) ([]string, error) {
-	var repoRoots []string
-	for _, root := range roots {
-		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() && d.Name() == ".git" {
-				repoRoots = append(repoRoots, filepath.Dir(path))
-				return fs.SkipDir
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-	sort.Slice(repoRoots, func(i, j int) bool {
-		return len(repoRoots[i]) > len(repoRoots[j])
-	})
-	return repoRoots, nil
-}
-
-// repoRootFor returns the deepest repo root that is an ancestor of fpath,
-// or an empty string if fpath is not inside any known repo.
-func repoRootFor(fpath string, repoRoots []string) string {
-	for _, r := range repoRoots {
-		if strings.HasPrefix(fpath, r+string(filepath.Separator)) || fpath == r {
-			return r
-		}
-	}
-	return ""
-}
-
-func logUnresolvedPlaceholders(ctxDir string, bindings []StreamBinding) {
+// LogUnresolvedPlaceholders emits a debug log listing the property placeholders that
+// remain unresolved in the given bindings' destinations (ignoring Request/Reply
+// variables). It is a no-op unless debug logging is enabled.
+func LogUnresolvedPlaceholders(ctxDir string, bindings []StreamBinding) {
 	if !slog.Default().Enabled(context.TODO(), slog.LevelDebug) {
 		return
 	}
@@ -333,87 +321,6 @@ func logUnresolvedPlaceholders(ctxDir string, bindings []StreamBinding) {
 	}
 }
 
-// FindStreamBindings walks each of the given roots recursively and finds all Spring
-// application contexts. A context is usually a 'src/main/resources' directory.
-// For each context, it reads all application*.yml files together, allowing for
-// placeholder resolution across files.
-// It returns a map from context directory path to its non-empty list of stream bindings.
-func FindStreamBindings(roots []string, excludeProfiles []*regexp.Regexp) (map[string][]StreamBinding, error) {
-	repoRoots, err := findRepoRoots(roots)
-	if err != nil {
-		return nil, err
-	}
-
-	// fileIndex maps repo root -> (YAML basename -> full path) to resolve
-	// spring.config.import directives. Scoping per repo prevents files from one
-	// service from satisfying imports in another unrelated service.
-	fileIndex := make(map[string]map[string]string)
-	contextDirs := make(map[string]bool)
-
-	walkFn := func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-
-		// Always update fileIndex for YAML files (needed for spring.config.import).
-		if ext := filepath.Ext(path); ext == ".yml" || ext == ".yaml" {
-			repo := repoRootFor(path, repoRoots)
-			if fileIndex[repo] == nil {
-				fileIndex[repo] = make(map[string]string)
-			}
-			fileIndex[repo][filepath.Base(path)] = path
-		}
-
-		// Only care about Spring configuration files.
-		if !applicationYMLPattern.MatchString(d.Name()) {
-			return nil
-		}
-
-		// Only include contexts under src/main/resources; skip src/test/resources and others.
-		resPath := filepath.Join("src", "main", "resources")
-		idx := strings.LastIndex(path, resPath)
-		if idx == -1 {
-			return nil
-		}
-		contextDirs[path[:idx+len(resPath)]] = true
-		return nil
-	}
-
-	for _, root := range roots {
-		if err := filepath.WalkDir(root, walkFn); err != nil {
-			return nil, err
-		}
-	}
-
-	// Process each identified context.
-	result := make(map[string][]StreamBinding)
-	var sortedContexts []string
-	for cd := range contextDirs {
-		sortedContexts = append(sortedContexts, cd)
-	}
-	sort.Strings(sortedContexts)
-
-	for _, ctxDir := range sortedContexts {
-		slog.Debug("spring: processing context", "dir", ctxDir)
-		repo := repoRootFor(ctxDir, repoRoots)
-		props, err := ReadApplicationProperties(ctxDir, fileIndex[repo], excludeProfiles)
-		if err != nil {
-			slog.Warn("spring: could not read application properties", "dir", ctxDir, "err", err)
-			continue
-		}
-		if bindings := StreamBindings(props); len(bindings) > 0 {
-			slog.Info("spring: found bindings", "count", len(bindings), "dir", ctxDir)
-			logUnresolvedPlaceholders(ctxDir, bindings)
-			result[ctxDir] = bindings
-		}
-	}
-
-	return result, nil
-}
-
 // StreamBindings extracts all Spring Cloud Stream bindings from a flattened properties map.
 // It returns one StreamBinding per binding that has a destination property.
 func StreamBindings(props map[string]string) []StreamBinding {
@@ -425,6 +332,11 @@ func StreamBindings(props map[string]string) []StreamBinding {
 		if m == nil {
 			continue
 		}
+		// Skip Spring Cloud Stream request/reply reply-topic destinations: these are
+		// runtime-generated per-request reply queues, not real topics, and never match.
+		if strings.Contains(v, "${replyTopicWithWildcards|") {
+			continue
+		}
 		bindingName := m[1]
 		b := StreamBinding{
 			BindingName: bindingName,
@@ -433,17 +345,18 @@ func StreamBindings(props map[string]string) []StreamBinding {
 		if nm := bindingNamePattern.FindStringSubmatch(bindingName); nm != nil {
 			b.Direction = BindingDirection(nm[2])
 		}
-		if binder, ok := lookupRelaxed(props, "spring.cloud.stream.bindings."+bindingName+".binder"); ok {
-			b.Binder = binder
-		} else {
-			b.Binder = defaultBinder
+		// Resolve the binding's binder name (falling back to the default binder), then
+		// map it to its technology type. The binder name is user-chosen and not kept.
+		binder, ok := lookupRelaxed(props, "spring.cloud.stream.bindings."+bindingName+".binder")
+		if !ok {
+			binder = defaultBinder
 		}
-		if b.Binder != "" {
-			if t, ok := lookupRelaxed(props, "spring.cloud.stream.binders."+b.Binder+".type"); ok {
+		if binder != "" {
+			if t, ok := lookupRelaxed(props, "spring.cloud.stream.binders."+binder+".type"); ok {
 				b.BinderType = t
 			} else {
 				// No explicit type configured: the binder name is the type itself.
-				b.BinderType = b.Binder
+				b.BinderType = binder
 			}
 		}
 		bindings = append(bindings, b)
