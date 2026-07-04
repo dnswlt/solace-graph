@@ -48,6 +48,7 @@ type Modules struct {
 // resource files under its src/main/resources directory.
 func Scan(roots []string) (*Modules, error) {
 	ms := &Modules{byKey: make(map[string]*Module)}
+	seen := make(map[string]bool) // absolute pom paths already scanned (overlapping roots)
 
 	for _, root := range roots {
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -62,6 +63,14 @@ func Scan(roots []string) (*Modules, error) {
 			}
 			if d.Name() != "pom.xml" {
 				return nil
+			}
+			// Skip a pom.xml already scanned via another (overlapping) root, so the
+			// same physical module is not counted twice.
+			if abs, err := filepath.Abs(path); err == nil {
+				if seen[abs] {
+					return nil
+				}
+				seen[abs] = true
 			}
 			m, err := loadModule(path)
 			if err != nil {
@@ -80,8 +89,7 @@ func Scan(roots []string) (*Modules, error) {
 
 func (ms *Modules) add(m *Module) {
 	ms.All = append(ms.All, m)
-	// First module wins on key collisions (e.g. the same artifact scanned twice via
-	// overlapping roots); duplicates remain in All but resolve to the first.
+	// First module wins if two distinct directories declare the same GAV.
 	if _, ok := ms.byKey[m.Key()]; !ok {
 		ms.byKey[m.Key()] = m
 	}

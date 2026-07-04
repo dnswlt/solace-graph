@@ -36,6 +36,8 @@ func main() {
 		err = commands.Collect(os.Stdout, args)
 	case "graph":
 		err = commands.Graph(os.Stdout, args)
+	case "swcat":
+		err = commands.Swcat(os.Stdout, args)
 	default:
 		slog.Error("unknown command", "cmd", cmd)
 		os.Exit(1)
@@ -54,4 +56,5 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "\nCommands:\n")
 	fmt.Fprintf(os.Stderr, "  collect [-exclude-profile <regex>]... <root> [<root>...]   Extract bindings and map to applications\n")
 	fmt.Fprintf(os.Stderr, "  graph [-html <report.html>] <file> [<file>...]              Build dependency graph from collected bindings\n")
+	fmt.Fprintf(os.Stderr, "  swcat [-url <swcat-url>] <file> [<file>...]                  Match collected applications against swcat catalog entities\n")
 }

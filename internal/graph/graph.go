@@ -16,13 +16,6 @@ type Application struct {
 	Bindings []spring.StreamBinding `json:"bindings"` // all bindings
 }
 
-// Merge consolidates the data from another application instance into this one by
-// appending its files and bindings.
-func (a *Application) Merge(other *Application) {
-	a.Files = append(a.Files, other.Files...)
-	a.Bindings = append(a.Bindings, other.Bindings...)
-}
-
 // Sort sorts both the source files and the bindings of the application for deterministic output.
 func (a *Application) Sort() {
 	sort.Strings(a.Files)
