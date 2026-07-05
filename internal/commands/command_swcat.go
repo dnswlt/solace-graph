@@ -16,17 +16,29 @@ import (
 // Spring Cloud Stream bindings, and reports them to swcat as observed
 // dependencies (one POST per source Component).
 //
-// By default it runs as a dry run, printing what it would upload. Pass -post to
-// actually send the observations.
+// By default it uploads the observations. Pass -dry-run to only print what it
+// would send without contacting swcat, or -delete to remove all observations
+// this tool previously reported (see swcat.DetectedBy) and exit.
 func Swcat(out io.Writer, args []string) error {
 	fs := flag.NewFlagSet("swcat", flag.ContinueOnError)
 	url := fs.String("url", "http://localhost:9191", "base URL of the swcat server")
-	post := fs.Bool("post", false, "upload the observed dependencies to swcat (default: dry run)")
+	dryRun := fs.Bool("dry-run", false, "print what would be uploaded without sending it to swcat")
+	del := fs.Bool("delete", false, "delete all observations previously reported by this tool, then exit")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+
+	if *del {
+		client := swcat.NewClient(*url)
+		if err := client.DeleteObservedDependencies(swcat.DetectedBy); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "deleted observations detected by %q from %s\n", swcat.DetectedBy, *url)
+		return nil
+	}
+
 	if fs.NArg() < 1 {
-		return fmt.Errorf("usage: swcat [-url <swcat-url>] [-post] <file> [<file>...]")
+		return fmt.Errorf("usage: swcat [-url <swcat-url>] [-dry-run | -delete] <file> [<file>...]")
 	}
 
 	var apps []graph.Application
@@ -67,8 +79,8 @@ func Swcat(out io.Writer, args []string) error {
 	fmt.Fprintf(out, "%d source components with dependencies, %d observed dependencies total (%d source messages)\n",
 		withDeps, totalDeps, len(obs))
 
-	if !*post {
-		fmt.Fprintf(out, "\ndry run: pass -post to upload to %s\n", *url)
+	if *dryRun {
+		fmt.Fprintf(out, "\ndry run: would upload to %s (omit -dry-run to send)\n", *url)
 		return nil
 	}
 

@@ -48,12 +48,14 @@ sgraph report [-html <report.html>] <file> [<file>...]
 the observed dependencies between matched components.
 
 ```bash
-sgraph swcat [-url <swcat-url>] [-post] <file> [<file>...]
+sgraph swcat [-url <swcat-url>] [-dry-run | -delete] <file> [<file>...]
 ```
 
 - `-url`: base URL of the swcat server (default `http://localhost:9191`).
-- `-post`: actually upload the observations. Without it, `swcat` is a **dry run** that
-  prints what it would send.
+- `-dry-run`: don't upload; just print what would be sent. By default `swcat`
+  **uploads** the observations.
+- `-delete`: delete all observations this tool previously reported, then exit
+  (no input files needed).
 
 ## Example workflow
 
@@ -65,8 +67,8 @@ sgraph collect ~/git/service-a ~/git/service-b > all_bindings.json
 sgraph report -html report.html all_bindings.json
 
 # Preview what would be reported to the catalog, then upload it.
+sgraph swcat -url http://localhost:9191 -dry-run all_bindings.json
 sgraph swcat -url http://localhost:9191 all_bindings.json
-sgraph swcat -url http://localhost:9191 -post all_bindings.json
 ```
 
 Pass `-v` before the command for debug logging, e.g. `sgraph -v collect ...`.

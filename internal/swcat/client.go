@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -87,6 +88,31 @@ func (c *Client) PostObservedDependencies(od *catalogpb.ObservedDependencies) er
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return fmt.Errorf("POST %s: unexpected status %s: %s", endpoint, resp.Status, bytes.TrimSpace(body))
+	}
+	return nil
+}
+
+// DeleteObservedDependencies removes all observations previously reported under
+// detectedBy via DELETE {baseURL}/catalog/observed-dependencies/{detectedBy}.
+func (c *Client) DeleteObservedDependencies(detectedBy string) error {
+	endpoint := c.baseURL + "/catalog/observed-dependencies/" + url.PathEscape(detectedBy)
+	req, err := http.NewRequest(http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("building request for %s: %v", endpoint, err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("DELETE %s: %v", endpoint, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("reading response from %s: %v", endpoint, err)
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("DELETE %s: unexpected status %s: %s", endpoint, resp.Status, bytes.TrimSpace(body))
 	}
 	return nil
 }

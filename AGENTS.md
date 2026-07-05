@@ -75,8 +75,8 @@ inherited Component → System → Domain, with the entity name as artifactId), 
 them to collected applications by GAV. It runs the same `graph.Build` over the matched apps
 and, per source Component, emits an `ObservedDependencies` message covering only the
 `"from"` (this-component-consumes) edges. Reporting is a **full idempotent sync**: sources
-with no dependencies still emit an empty message, clearing previously observed deps. Dry
-run unless `-post` is given.
+with no dependencies still emit an empty message, clearing previously observed deps. Uploads
+by default; `-dry-run` only prints what would be sent.
 
 **`proto/swcat/catalog/v1/catalog.proto` is a verbatim copy from the
 [swcat](https://github.com/dnswlt/swcat) repo, which owns it.** Do **not** edit it (or the
