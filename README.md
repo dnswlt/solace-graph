@@ -13,7 +13,7 @@ technologies and only matches bindings **within the same technology**:
 ## Usage
 
 The tool works in two steps: **collect** once (slow, reads the filesystem) into JSON, then
-run **graph** or **swcat** as often as needed on that JSON. In `graph` and `swcat`,
+run **report** or **swcat** as often as needed on that JSON. In `report` and `swcat`,
 `<file>` is always output from `collect`.
 
 ### 1. Collect bindings
@@ -30,16 +30,16 @@ sgraph collect [-exclude-profile <regex>]... [-exclude-app <regex>]... <root> [<
 - `-exclude-app <regex>`: skip applications whose artifactId matches. Repeatable.
 - `<root>`: one or more directories to scan recursively for `pom.xml` modules.
 
-### 2. Build dependency graph
+### 2. Build dependency report
 
-`graph` processes the collected bindings into a dependency graph, optionally rendering an
-HTML report.
+`report` processes the collected bindings into a dependency graph and renders a
+self-contained, interactive HTML report.
 
 ```bash
-sgraph graph [-html <report.html>] <file> [<file>...] > graph.json
+sgraph report [-html <report.html>] <file> [<file>...]
 ```
 
-- `-html`: optional path to write a self-contained, interactive HTML report.
+- `-html`: path to write the HTML report (default `sgraph.html`).
 
 ### 3. Report to swcat
 
@@ -61,8 +61,8 @@ sgraph swcat [-url <swcat-url>] [-post] <file> [<file>...]
 # Collect bindings from two repositories.
 sgraph collect ~/git/service-a ~/git/service-b > all_bindings.json
 
-# Generate a dependency graph and an interactive HTML report.
-sgraph graph -html report.html all_bindings.json > graph.json
+# Render an interactive HTML dependency report.
+sgraph report -html report.html all_bindings.json
 
 # Preview what would be reported to the catalog, then upload it.
 sgraph swcat -url http://localhost:9191 all_bindings.json

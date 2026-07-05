@@ -34,8 +34,8 @@ func main() {
 	switch cmd {
 	case "collect":
 		err = commands.Collect(os.Stdout, args)
-	case "graph":
-		err = commands.Graph(os.Stdout, args)
+	case "report":
+		err = commands.Report(os.Stdout, args)
 	case "swcat":
 		err = commands.Swcat(os.Stdout, args)
 	default:
@@ -55,6 +55,6 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  -v   enable debug logging\n")
 	fmt.Fprintf(os.Stderr, "\nCommands:\n")
 	fmt.Fprintf(os.Stderr, "  collect [-exclude-profile <regex>]... <root> [<root>...]   Extract bindings and map to applications\n")
-	fmt.Fprintf(os.Stderr, "  graph [-html <report.html>] <file> [<file>...]              Build dependency graph from collected bindings\n")
+	fmt.Fprintf(os.Stderr, "  report [-html <report.html>] <file> [<file>...]             Render an HTML dependency report from collected bindings\n")
 	fmt.Fprintf(os.Stderr, "  swcat [-url <swcat-url>] [-post] <file> [<file>...]          Report observed dependencies between matched components to swcat\n")
 }

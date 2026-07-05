@@ -2,7 +2,6 @@ package commands
 
 import (
 	"bytes"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -13,17 +12,21 @@ import (
 	"github.com/dnswlt/solace-graph/internal/report"
 )
 
-// Graph builds a dependency graph from collected bindings in the input files and writes it as JSON to out.
-func Graph(out io.Writer, args []string) error {
-	fs := flag.NewFlagSet("graph", flag.ContinueOnError)
-	htmlPath := fs.String("html", "", "path to output the HTML report")
+// defaultReportPath is the HTML report file written when -html is not given.
+const defaultReportPath = "sgraph.html"
+
+// Report builds a dependency graph from collected bindings in the input files
+// and renders it as a self-contained HTML report.
+func Report(out io.Writer, args []string) error {
+	fs := flag.NewFlagSet("report", flag.ContinueOnError)
+	htmlPath := fs.String("html", defaultReportPath, "path to write the HTML report")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	patterns := fs.Args()
 	if len(patterns) == 0 {
-		return fmt.Errorf("usage: graph [-html <report.html>] <file_or_pattern> [<file_or_pattern>...]")
+		return fmt.Errorf("usage: report [-html <report.html>] <file_or_pattern> [<file_or_pattern>...]")
 	}
 
 	var allPaths []string
@@ -53,18 +56,12 @@ func Graph(out io.Writer, args []string) error {
 
 	nodes := graph.Build(allApps)
 
-	if *htmlPath != "" {
-		var buf bytes.Buffer
-		if err := report.Generate(&buf, nodes); err != nil {
-			return fmt.Errorf("could not generate HTML report: %v", err)
-		}
-		if err := os.WriteFile(*htmlPath, buf.Bytes(), 0644); err != nil {
-			return fmt.Errorf("could not write HTML report file: %v", err)
-		}
-		return nil
+	var buf bytes.Buffer
+	if err := report.Generate(&buf, nodes); err != nil {
+		return fmt.Errorf("could not generate HTML report: %v", err)
 	}
-
-	enc := json.NewEncoder(out)
-	enc.SetIndent("", "  ")
-	return enc.Encode(nodes)
+	if err := os.WriteFile(*htmlPath, buf.Bytes(), 0644); err != nil {
+		return fmt.Errorf("could not write HTML report file: %v", err)
+	}
+	return nil
 }

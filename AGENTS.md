@@ -48,12 +48,12 @@ lives in the code.
 ## Code layout
 
 ```text
-cmd/sgraph/            CLI entrypoint (main.go: collect|graph|swcat) + log handler
+cmd/sgraph/            CLI entrypoint (main.go: collect|report|swcat) + log handler
 internal/maven/        pom.xml parsing (GAV, dependencies) and module/classpath scanning
 internal/spring/       app-context reading, placeholder resolution, binding extraction,
                        topic syntax + matching (the core heuristics live here)
 internal/graph/        Application model + Build(): producer/consumer edge construction
-internal/report/       self-contained interactive HTML report (graph -html)
+internal/report/       self-contained interactive HTML report (report -html)
 internal/swcat/        swcat catalog HTTP client, Component<->Application matching,
                        and ObservedDependencies reporting
 proto/swcat/...        vendored .proto (see below); generated via `make proto`
