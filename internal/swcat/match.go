@@ -29,6 +29,13 @@ type Match struct {
 	GroupID    string // Maven groupId resolved for the component
 	ArtifactID string // Maven artifactId resolved for the component
 	App        *graph.Application
+	// Shadowed is set when another Match resolves to the same coordinates and
+	// takes precedence: an application can only be reported as one Component,
+	// so the last one wins and nothing is reported for the shadowed ones. Only
+	// Matches with an App can be shadowed; without one nothing is reported
+	// either way. Duplicate coordinates are legitimate (e.g. two entities for
+	// two live versions of the same binary), hence a pick, not an error.
+	Shadowed bool
 }
 
 // MatchResult holds the outcome of matching catalog Components against collected
@@ -63,6 +70,7 @@ func MatchComponents(entities []*catalogpb.Entity, apps []graph.Application) Mat
 
 	var res MatchResult
 	matchedCoords := make(map[string]bool)
+	lastMatch := make(map[string]int) // coords -> index into res.Matches
 	for _, e := range entities {
 		if e.GetKind() != KindComponent {
 			continue
@@ -76,6 +84,10 @@ func MatchComponents(entities []*catalogpb.Entity, apps []graph.Application) Mat
 		app := appByCoords[coords]
 		if app != nil {
 			matchedCoords[coords] = true
+			if prev, dup := lastMatch[coords]; dup {
+				res.Matches[prev].Shadowed = true
+			}
+			lastMatch[coords] = len(res.Matches)
 		}
 		res.Matches = append(res.Matches, Match{
 			Component:  e,

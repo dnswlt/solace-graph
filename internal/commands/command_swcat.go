@@ -62,42 +62,61 @@ func Swcat(out io.Writer, args []string) error {
 	obs, dropped := swcat.ObservedDependencies(res)
 
 	var matched int
-	var catalogOnly []string
+	reportedAs := make(map[string]string) // coords -> name of the component that won
 	for _, m := range res.Matches {
-		if m.App != nil {
-			matched++
+		if m.App == nil {
 			continue
 		}
-		catalogOnly = append(catalogOnly, fmt.Sprintf("%s (%s:%s)", m.Component.GetMetadata().GetName(), m.GroupID, m.ArtifactID))
+		matched++
+		if !m.Shadowed {
+			reportedAs[m.GroupID+":"+m.ArtifactID] = m.Component.GetMetadata().GetName()
+		}
 	}
+	// Counted per side: duplicate coordinates make several components match the
+	// same module, so the two numbers need not agree.
 	fmt.Fprintf(out, "matched %d/%d catalog components and %d/%d collected applications\n",
-		matched, len(res.Matches)+len(res.Unresolved), matched, len(apps))
+		matched, len(res.Matches)+len(res.Unresolved), len(apps)-len(res.UnmatchedApps), len(apps))
 
 	// Everything below reports what did *not* work, most actionable first.
 	var unresolved []string
 	for _, e := range res.Unresolved {
 		unresolved = append(unresolved, e.GetMetadata().GetName())
 	}
-	printProblems(out, "catalog components have no Maven groupId, so they can never match "+
-		"(annotate the component, its system or its domain with maven.apache.org/groupId, "+
-		"or the component with maven.apache.org/coords)", unresolved)
+	printProblems(out, "catalog components with no Maven groupId (annotate the component, its system "+
+		"or its domain with maven.apache.org/groupId, or the component with maven.apache.org/coords)", unresolved)
+
+	var shadowed []string
+	for _, m := range res.Matches {
+		if !m.Shadowed {
+			continue
+		}
+		coords := m.GroupID + ":" + m.ArtifactID
+		shadowed = append(shadowed, fmt.Sprintf("%s (%s), reported as %s",
+			m.Component.GetMetadata().GetName(), coords, reportedAs[coords]))
+	}
+	printProblems(out, "catalog components skipped, another component has the same Maven coordinates", shadowed)
 
 	var appOnly []string
 	for _, a := range res.UnmatchedApps {
 		appOnly = append(appOnly, a.GAV.GroupId+":"+a.GAV.ArtifactId)
 	}
-	printProblems(out, "collected applications have no catalog component, so nothing is reported for them", appOnly)
+	printProblems(out, "scanned Maven modules that no catalog component claims", appOnly)
 
-	var drops []string
+	// A dropped dependency is missing either its producer or its consumer; the
+	// two cases are listed apart so each line needs no marker to be read.
+	var noProducer, noConsumer []string
 	for _, d := range dropped {
-		drops = append(drops, fmt.Sprintf("%s -> %s:%s [%s]",
-			d.Source.GetMetadata().GetName(), d.Target.GroupId, d.Target.ArtifactId, strings.Join(d.Topics, ", ")))
+		line := fmt.Sprintf("%s:%s -> %s:%s [%s]",
+			d.Consumer.GroupId, d.Consumer.ArtifactId,
+			d.Producer.GroupId, d.Producer.ArtifactId, strings.Join(d.Topics, ", "))
+		if d.Missing == d.Producer {
+			noProducer = append(noProducer, line)
+		} else {
+			noConsumer = append(noConsumer, line)
+		}
 	}
-	printProblems(out, "detected dependencies are not reported, because the producing application "+
-		"is one of those missing from the catalog", drops)
-
-	printProblems(out, "catalog components have no collected application "+
-		"(not built from the scanned sources; expected unless the sources should cover them)", catalogOnly)
+	printProblems(out, "detected dependencies dropped, the producing module has no catalog component", noProducer)
+	printProblems(out, "detected dependencies dropped, the consuming module has no catalog component", noConsumer)
 
 	var withDeps, totalDeps int
 	for _, od := range obs {

@@ -79,11 +79,22 @@ with no dependencies still emit an empty message, clearing previously observed d
 by default; `-dry-run` only prints what would be sent.
 
 Unmatched apps are in the graph purely for diagnostics: they can never be a source, but an
-edge into one is returned as a `swcat.DroppedDependency` rather than vanishing. Likewise
-`MatchResult.Unresolved` keeps the Components whose groupId could not be resolved. The
-command's stdout is a one-line match summary followed by sections for **what went wrong**
-only (unresolvable components, apps missing from the catalog, dropped dependencies, catalog
-components with no app, rejected posts) — the successful mappings are printed only under
+edge touching one is returned as a `swcat.DroppedDependency` rather than vanishing. Both
+orientations count — a missing *consumer* loses the dependency just as surely as a missing
+producer, since only matched Components are sources — so `dependencies` inspects the `"to"`
+matches too, and each dropped dependency is found once, from whichever end is matched.
+Likewise `MatchResult.Unresolved` keeps the Components whose groupId could not be resolved.
+
+Several Components may legitimately resolve to the same coordinates (e.g. two entities for
+two live versions of the same binary). An application can only be reported as one Component,
+so the last match wins and the earlier ones are flagged `Match.Shadowed` — reported to the
+user, not silently dropped. Keep the pick where it is: `MatchComponents` decides, and
+`ObservedDependencies` skips shadowed matches explicitly rather than relying on map-overwrite
+order.
+
+The command's stdout is a one-line match summary followed by sections for **what went wrong**
+only (unresolvable components, shadowed duplicates, modules missing from the catalog, dropped
+dependencies, rejected posts) — the successful mappings are printed only under
 `-dry-run`. Keep it that way: on a real catalog the successes are the bulk and the problems
 are what the user acts on.
 
