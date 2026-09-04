@@ -72,11 +72,20 @@ Dependency direction: `graph` and `swcat` depend on `spring` and `maven`; `sprin
 `swcat` fetches catalog `Component` entities, resolves each to Maven coordinates
 (`match.go`: an explicit `maven.apache.org/coords` annotation, or a `groupId` annotation
 inherited Component → System → Domain, with the entity name as artifactId), and matches
-them to collected applications by GAV. It runs the same `graph.Build` over the matched apps
-and, per source Component, emits an `ObservedDependencies` message covering only the
-`"from"` (this-component-consumes) edges. Reporting is a **full idempotent sync**: sources
+them to collected applications by GAV. It runs the same `graph.Build` over *all* collected
+apps and, per matched source Component, emits an `ObservedDependencies` message covering only
+the `"from"` (this-component-consumes) edges. Reporting is a **full idempotent sync**: sources
 with no dependencies still emit an empty message, clearing previously observed deps. Uploads
 by default; `-dry-run` only prints what would be sent.
+
+Unmatched apps are in the graph purely for diagnostics: they can never be a source, but an
+edge into one is returned as a `swcat.DroppedDependency` rather than vanishing. Likewise
+`MatchResult.Unresolved` keeps the Components whose groupId could not be resolved. The
+command's stdout is a one-line match summary followed by sections for **what went wrong**
+only (unresolvable components, apps missing from the catalog, dropped dependencies, catalog
+components with no app, rejected posts) — the successful mappings are printed only under
+`-dry-run`. Keep it that way: on a real catalog the successes are the bulk and the problems
+are what the user acts on.
 
 **`proto/swcat/catalog/v1/catalog.proto` is a verbatim copy from the
 [swcat](https://github.com/dnswlt/swcat) repo, which owns it.** Do **not** edit it (or the

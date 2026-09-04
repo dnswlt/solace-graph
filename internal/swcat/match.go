@@ -41,13 +41,17 @@ type MatchResult struct {
 	// UnmatchedApps are Applications no Component matched (app-only: collected
 	// from the sources but absent from the catalog).
 	UnmatchedApps []*graph.Application
-	// Ignored counts Components skipped because no groupId could be resolved.
-	Ignored int
+	// Unresolved are Components skipped before matching because no groupId
+	// could be resolved for them, neither from an annotation on the Component
+	// itself nor inherited from its System or Domain. They are kept (rather
+	// than counted) so callers can name what needs fixing in the catalog.
+	Unresolved []*catalogpb.Entity
 }
 
 // MatchComponents resolves every Component entity to Maven coordinates
 // (groupId:artifactId) and matches it against apps by those coordinates.
-// Components whose groupId cannot be resolved are ignored (counted, not matched).
+// Components whose groupId cannot be resolved take part in no matching and are
+// collected in MatchResult.Unresolved.
 func MatchComponents(entities []*catalogpb.Entity, apps []graph.Application) MatchResult {
 	ix := newEntityIndex(entities)
 
@@ -65,7 +69,7 @@ func MatchComponents(entities []*catalogpb.Entity, apps []graph.Application) Mat
 		}
 		groupID, artifactID := ix.resolveCoords(e)
 		if groupID == "" {
-			res.Ignored++
+			res.Unresolved = append(res.Unresolved, e)
 			continue
 		}
 		coords := groupID + ":" + artifactID

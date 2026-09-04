@@ -57,6 +57,13 @@ sgraph swcat [-url <swcat-url>] [-dry-run | -delete] <file> [<file>...]
 - `-delete`: delete all observations this tool previously reported, then exit
   (no input files needed).
 
+It prints a one-line match summary and then reports only what went wrong, naming the
+entities involved: catalog components with no resolvable Maven groupId (they can never
+match), collected applications missing from the catalog, dependencies that could not be
+reported because the producing application is one of those missing components, catalog
+components that no collected application matched, and any messages swcat rejected. The
+mappings that *did* work are listed only under `-dry-run`.
+
 ## Example workflow
 
 ```bash

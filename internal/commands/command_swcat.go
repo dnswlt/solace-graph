@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 
 	"github.com/dnswlt/solace-graph/internal/graph"
 	"github.com/dnswlt/solace-graph/internal/swcat"
@@ -58,42 +59,97 @@ func Swcat(out io.Writer, args []string) error {
 	slog.Info("retrieved catalog entities", "count", len(entities), "url", *url)
 
 	res := swcat.MatchComponents(entities, apps)
+	obs, dropped := swcat.ObservedDependencies(res)
+
 	var matched int
+	var catalogOnly []string
 	for _, m := range res.Matches {
 		if m.App != nil {
 			matched++
+			continue
 		}
+		catalogOnly = append(catalogOnly, fmt.Sprintf("%s (%s:%s)", m.Component.GetMetadata().GetName(), m.GroupID, m.ArtifactID))
 	}
-	fmt.Fprintf(out, "%d matched, %d catalog-only, %d app-only (%d components ignored: no groupId)\n",
-		matched, len(res.Matches)-matched, len(res.UnmatchedApps), res.Ignored)
+	fmt.Fprintf(out, "matched %d/%d catalog components and %d/%d collected applications\n",
+		matched, len(res.Matches)+len(res.Unresolved), matched, len(apps))
 
-	obs := swcat.ObservedDependencies(res)
+	// Everything below reports what did *not* work, most actionable first.
+	var unresolved []string
+	for _, e := range res.Unresolved {
+		unresolved = append(unresolved, e.GetMetadata().GetName())
+	}
+	printProblems(out, "catalog components have no Maven groupId, so they can never match "+
+		"(annotate the component, its system or its domain with maven.apache.org/groupId, "+
+		"or the component with maven.apache.org/coords)", unresolved)
+
+	var appOnly []string
+	for _, a := range res.UnmatchedApps {
+		appOnly = append(appOnly, a.GAV.GroupId+":"+a.GAV.ArtifactId)
+	}
+	printProblems(out, "collected applications have no catalog component, so nothing is reported for them", appOnly)
+
+	var drops []string
+	for _, d := range dropped {
+		drops = append(drops, fmt.Sprintf("%s -> %s:%s [%s]",
+			d.Source.GetMetadata().GetName(), d.Target.GroupId, d.Target.ArtifactId, strings.Join(d.Topics, ", ")))
+	}
+	printProblems(out, "detected dependencies are not reported, because the producing application "+
+		"is one of those missing from the catalog", drops)
+
+	printProblems(out, "catalog components have no collected application "+
+		"(not built from the scanned sources; expected unless the sources should cover them)", catalogOnly)
+
 	var withDeps, totalDeps int
 	for _, od := range obs {
 		if n := len(od.GetDependencies()); n > 0 {
 			withDeps++
 			totalDeps += n
-			fmt.Fprintf(out, "  %s: %s\n", od.GetSource().GetName(), swcat.Summary(od))
 		}
 	}
-	fmt.Fprintf(out, "%d source components with dependencies, %d observed dependencies total (%d source messages)\n",
-		withDeps, totalDeps, len(obs))
+	fmt.Fprintf(out, "\nreporting %d dependencies of %d source components (%d messages, the rest clearing previous observations)\n",
+		totalDeps, withDeps, len(obs))
 
 	if *dryRun {
-		fmt.Fprintf(out, "\ndry run: would upload to %s (omit -dry-run to send)\n", *url)
+		for _, od := range obs {
+			if len(od.GetDependencies()) > 0 {
+				fmt.Fprintf(out, "  %s: %s\n", od.GetSource().GetName(), swcat.Summary(od))
+			}
+		}
+		fmt.Fprintf(out, "\ndry run: nothing sent to %s (omit -dry-run to upload)\n", *url)
 		return nil
 	}
 
-	var failed int
+	var failed []string
 	for _, od := range obs {
 		if err := client.PostObservedDependencies(od); err != nil {
-			slog.Error("failed to post observed dependencies", "source", od.GetSource().GetName(), "err", err)
-			failed++
+			slog.Debug("failed to post observed dependencies", "source", od.GetSource().GetName(), "err", err)
+			failed = append(failed, fmt.Sprintf("%s: %v", od.GetSource().GetName(), err))
 		}
 	}
-	fmt.Fprintf(out, "\nposted %d/%d source messages to %s\n", len(obs)-failed, len(obs), *url)
-	if failed > 0 {
-		return fmt.Errorf("%d of %d posts failed", failed, len(obs))
+	fmt.Fprintf(out, "\nposted %d/%d messages to %s\n", len(obs)-len(failed), len(obs), *url)
+	printProblems(out, "messages were rejected by swcat", failed)
+	if len(failed) > 0 {
+		return fmt.Errorf("%d of %d posts failed", len(failed), len(obs))
 	}
 	return nil
+}
+
+// maxListed caps how many entries printProblems spells out; beyond it only the
+// remaining count is shown, so a large catalog can't bury the summary.
+const maxListed = 20
+
+// printProblems writes one "N <what went wrong>" section listing the offending
+// entries, or nothing at all if there are none.
+func printProblems(out io.Writer, headline string, items []string) {
+	if len(items) == 0 {
+		return
+	}
+	fmt.Fprintf(out, "\n%d %s:\n", len(items), headline)
+	for i, item := range items {
+		if i == maxListed {
+			fmt.Fprintf(out, "  ... and %d more\n", len(items)-maxListed)
+			break
+		}
+		fmt.Fprintf(out, "  %s\n", item)
+	}
 }

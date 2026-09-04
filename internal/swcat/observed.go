@@ -16,7 +16,16 @@ const DetectedBy = "solace-graph"
 // from the neighbor. We report dependencies from this side only (see dependencies).
 const dirFrom = "from"
 
-// ObservedDependencies runs the dependency analysis over the matched
+// DroppedDependency is a dependency that was detected but cannot be reported:
+// the source Component consumes from an application that has no catalog
+// Component, so there is no target to point an observation at.
+type DroppedDependency struct {
+	Source *catalogpb.Entity // the consuming Component
+	Target maven.GAV         // the producing application, absent from the catalog
+	Topics []string          // the topics Source consumes from it
+}
+
+// ObservedDependencies runs the dependency analysis over the collected
 // applications and converts, for each matched source Component, its
 // dependencies on other matched Components into an ObservedDependencies
 // message.
@@ -24,36 +33,56 @@ const dirFrom = "from"
 // One message is returned per matched source Component, including sources with
 // no dependencies: reporting an empty list clears any dependencies previously
 // observed by this tool, so the result is a full, idempotent sync.
-func ObservedDependencies(res MatchResult) []*catalogpb.ObservedDependencies {
-	apps := make([]graph.Application, 0, len(res.Matches))
+//
+// The graph is built over the unmatched applications as well, even though they
+// can never be a source. That way a dependency on an application that is
+// missing from the catalog is returned as a DroppedDependency instead of
+// silently disappearing from the report.
+func ObservedDependencies(res MatchResult) ([]*catalogpb.ObservedDependencies, []DroppedDependency) {
+	apps := make([]graph.Application, 0, len(res.Matches)+len(res.UnmatchedApps))
 	compByGAV := make(map[maven.GAV]*catalogpb.Entity, len(res.Matches))
+	seen := make(map[maven.GAV]bool, cap(apps))
+	addApp := func(app *graph.Application) {
+		if seen[app.GAV] {
+			return // graph.Build requires apps to be unique by GAV
+		}
+		seen[app.GAV] = true
+		apps = append(apps, *app)
+	}
 	for _, m := range res.Matches {
 		if m.App == nil {
 			continue
 		}
-		apps = append(apps, *m.App)
+		addApp(m.App)
 		compByGAV[m.App.GAV] = m.Component
+	}
+	for _, app := range res.UnmatchedApps {
+		addApp(app)
 	}
 
 	nodes := graph.Build(apps)
 
-	result := make([]*catalogpb.ObservedDependencies, 0, len(nodes))
+	msgs := make([]*catalogpb.ObservedDependencies, 0, len(nodes))
+	var dropped []DroppedDependency
 	for _, node := range nodes {
 		src, ok := compByGAV[node.App.GAV]
 		if !ok {
-			continue // not a matched component (shouldn't happen: Build ran over matched apps)
+			continue // an unmatched application: no Component to report it for
 		}
-		result = append(result, &catalogpb.ObservedDependencies{
+		deps, drops := dependencies(src, node.Edges, compByGAV)
+		msgs = append(msgs, &catalogpb.ObservedDependencies{
 			Source:       componentRef(src),
 			DetectedBy:   DetectedBy,
-			Dependencies: dependencies(node.Edges, compByGAV),
+			Dependencies: deps,
 		})
+		dropped = append(dropped, drops...)
 	}
-	return result
+	return msgs, dropped
 }
 
-// dependencies converts a source node's edges into ObservedDependency entries,
-// keeping only neighbors that are themselves matched Components.
+// dependencies converts a source node's edges into ObservedDependency entries.
+// Edges whose neighbor is not itself a matched Component are returned as
+// DroppedDependency instead, so the caller can report what could not be synced.
 //
 // Only the "consumes" direction is reported. graph.Build produces symmetric
 // edges: whenever A consumes from B, that same relationship surfaces as a "from"
@@ -61,14 +90,10 @@ func ObservedDependencies(res MatchResult) []*catalogpb.ObservedDependencies {
 // only records each message-flow dependency exactly once, attributed to the
 // component that depends on the other (the consumer needs the producer's
 // messages). The producing side is captured as the consumer's dependency.
-func dependencies(edges []graph.Edge, compByGAV map[maven.GAV]*catalogpb.Entity) []*catalogpb.ObservedDependency {
+func dependencies(src *catalogpb.Entity, edges []graph.Edge, compByGAV map[maven.GAV]*catalogpb.Entity) ([]*catalogpb.ObservedDependency, []DroppedDependency) {
 	var deps []*catalogpb.ObservedDependency
+	var dropped []DroppedDependency
 	for _, e := range edges {
-		target, ok := compByGAV[e.To]
-		if !ok {
-			continue
-		}
-
 		// Evidence is the source's own binding destination (Local): the topic it
 		// subscribes to. The remote destination is the same channel and would be
 		// redundant.
@@ -78,15 +103,23 @@ func dependencies(edges []graph.Edge, compByGAV map[maven.GAV]*catalogpb.Entity)
 				topics[m.Local.Destination] = true
 			}
 		}
-		if ev := sortedKeys(topics); len(ev) > 0 {
-			deps = append(deps, &catalogpb.ObservedDependency{
-				Target:   componentRef(target),
-				Relation: catalogpb.DependencyRelation_DEPENDENCY_RELATION_CONSUMES,
-				Evidence: ev,
-			})
+		ev := sortedKeys(topics)
+		if len(ev) == 0 {
+			continue // a "to"-only edge: reported as the consumer's dependency
 		}
+
+		target, ok := compByGAV[e.To]
+		if !ok {
+			dropped = append(dropped, DroppedDependency{Source: src, Target: e.To, Topics: ev})
+			continue
+		}
+		deps = append(deps, &catalogpb.ObservedDependency{
+			Target:   componentRef(target),
+			Relation: catalogpb.DependencyRelation_DEPENDENCY_RELATION_CONSUMES,
+			Evidence: ev,
+		})
 	}
-	return deps
+	return deps, dropped
 }
 
 // sortedKeys returns the non-empty keys of set, sorted for deterministic output.
