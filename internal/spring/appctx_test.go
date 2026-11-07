@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strings"
@@ -405,6 +406,68 @@ func TestStreamBindingsBinderType(t *testing.T) {
 			b := bindings[0]
 			if b.BinderType != tt.wantBinderType {
 				t.Errorf("BinderType: got %q, want %q", b.BinderType, tt.wantBinderType)
+			}
+		})
+	}
+}
+
+func TestStreamBindingsCommaSeparatedDestinations(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+		dest string
+		want []string
+	}{
+		{
+			name: "consumer: one binding per destination",
+			key:  "spring.cloud.stream.bindings.myBinding-in-0.destination",
+			dest: "a/topic/update, INTERNAL/a/topic/update",
+			want: []string{"a/topic/update", "INTERNAL/a/topic/update"},
+		},
+		{
+			name: "consumer: comma inside unresolved placeholder is kept",
+			key:  "spring.cloud.stream.bindings.myBinding-in-0.destination",
+			dest: "a/${X:b,c}/update,d/topic",
+			want: []string{"a/${X:b,c}/update", "d/topic"},
+		},
+		{
+			name: "consumer: reply topic after real topic is dropped independently",
+			key:  "spring.cloud.stream.bindings.myBinding-in-0.destination",
+			dest: "orders/created,${replyTopicWithWildcards|request|*}",
+			want: []string{"orders/created"},
+		},
+		{
+			name: "consumer: reply topic before real topic is dropped independently",
+			key:  "spring.cloud.stream.bindings.myBinding-in-0.destination",
+			dest: "${replyTopicWithWildcards|request|*}, orders/created",
+			want: []string{"orders/created"},
+		},
+		{
+			name: "consumer: standalone reply topic is dropped",
+			key:  "spring.cloud.stream.bindings.myBinding-in-0.destination",
+			dest: "${replyTopicWithWildcards|request|*}",
+		},
+		{
+			name: "producer: reply topic is dropped",
+			key:  "spring.cloud.stream.bindings.myBinding-out-0.destination",
+			dest: "${replyTopicWithWildcards|request|*}",
+		},
+		{
+			name: "producer: not split",
+			key:  "spring.cloud.stream.bindings.myBinding-out-0.destination",
+			dest: "a/topic,b/topic",
+			want: []string{"a/topic,b/topic"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bindings := StreamBindings(map[string]string{tt.key: tt.dest})
+			var got []string
+			for _, b := range bindings {
+				got = append(got, b.Destination)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("destinations: got %q, want %q", got, tt.want)
 			}
 		})
 	}

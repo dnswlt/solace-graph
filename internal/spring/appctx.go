@@ -322,7 +322,8 @@ func LogUnresolvedPlaceholders(ctxDir string, bindings []StreamBinding) {
 }
 
 // StreamBindings extracts all Spring Cloud Stream bindings from a flattened properties map.
-// It returns one StreamBinding per binding that has a destination property.
+// It returns one StreamBinding per destination, splitting comma-separated consumer
+// destinations and excluding request/reply reply-topics.
 func StreamBindings(props map[string]string) []StreamBinding {
 	defaultBinder, _ := lookupRelaxed(props, "spring.cloud.stream.default-binder")
 
@@ -332,18 +333,16 @@ func StreamBindings(props map[string]string) []StreamBinding {
 		if m == nil {
 			continue
 		}
-		// Skip Spring Cloud Stream request/reply reply-topic destinations: these are
-		// runtime-generated per-request reply queues, not real topics, and never match.
-		if strings.Contains(v, "${replyTopicWithWildcards|") {
-			continue
-		}
 		bindingName := m[1]
-		b := StreamBinding{
-			BindingName: bindingName,
-			Destination: v,
-		}
+		var direction BindingDirection
 		if nm := bindingNamePattern.FindStringSubmatch(bindingName); nm != nil {
-			b.Direction = BindingDirection(nm[2])
+			direction = BindingDirection(nm[2])
+		}
+		// Consumer bindings may subscribe to several comma-separated destinations;
+		// emit one binding per destination so each is matched as its own topic.
+		dests := []string{v}
+		if direction == BindingIn {
+			dests = splitDestinations(v)
 		}
 		// Resolve the binding's binder name (falling back to the default binder), then
 		// map it to its technology type. The binder name is user-chosen and not kept.
@@ -351,17 +350,57 @@ func StreamBindings(props map[string]string) []StreamBinding {
 		if !ok {
 			binder = defaultBinder
 		}
+		var binderType string
 		if binder != "" {
 			if t, ok := lookupRelaxed(props, "spring.cloud.stream.binders."+binder+".type"); ok {
-				b.BinderType = t
+				binderType = t
 			} else {
 				// No explicit type configured: the binder name is the type itself.
-				b.BinderType = binder
+				binderType = binder
 			}
 		}
-		bindings = append(bindings, b)
+		for _, d := range dests {
+			// Reply-topics are runtime-generated per-request queues. Filter each
+			// destination separately so real topics in the same list are retained.
+			if strings.Contains(d, "${replyTopicWithWildcards|") {
+				continue
+			}
+			bindings = append(bindings, StreamBinding{
+				BindingName: bindingName,
+				Destination: d,
+				Direction:   direction,
+				BinderType:  binderType,
+			})
+		}
 	}
 	return bindings
+}
+
+// splitDestinations splits a comma-separated destination list, ignoring commas inside
+// unresolved ${...} placeholders, and drops empty parts.
+func splitDestinations(v string) []string {
+	var parts []string
+	depth, start := 0, 0
+	for i := 0; i < len(v); i++ {
+		switch {
+		case v[i] == '$' && i+1 < len(v) && v[i+1] == '{':
+			depth++
+			i++
+		case v[i] == '}' && depth > 0:
+			depth--
+		case v[i] == ',' && depth == 0:
+			parts = append(parts, v[start:i])
+			start = i + 1
+		}
+	}
+	parts = append(parts, v[start:])
+	var out []string
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // TopicSyntax describes how a binder technology structures its topic strings.

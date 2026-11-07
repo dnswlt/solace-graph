@@ -20,7 +20,10 @@ type Application struct {
 func (a *Application) Sort() {
 	sort.Strings(a.Files)
 	sort.Slice(a.Bindings, func(i, j int) bool {
-		return a.Bindings[i].BindingName < a.Bindings[j].BindingName
+		if a.Bindings[i].BindingName != a.Bindings[j].BindingName {
+			return a.Bindings[i].BindingName < a.Bindings[j].BindingName
+		}
+		return a.Bindings[i].Destination < a.Bindings[j].Destination
 	})
 }
 
