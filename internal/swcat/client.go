@@ -60,14 +60,14 @@ func (c *Client) Entities() ([]*catalogpb.Entity, error) {
 	return listResp.GetEntities(), nil
 }
 
-// PostObservedDependencies reports the observed dependencies for a single source
-// entity via POST {baseURL}/catalog/observed-dependencies, sending the message
-// as protojson.
-func (c *Client) PostObservedDependencies(od *catalogpb.ObservedDependencies) error {
-	endpoint := c.baseURL + "/catalog/observed-dependencies"
-	payload, err := protojson.Marshal(od)
+// PostObservedEndpoints reports the observed endpoints of a single source
+// entity via POST {baseURL}/catalog/observed-endpoints, sending the message as
+// protojson.
+func (c *Client) PostObservedEndpoints(oe *catalogpb.ObservedEndpoints) error {
+	endpoint := c.baseURL + "/catalog/observed-endpoints"
+	payload, err := protojson.Marshal(oe)
 	if err != nil {
-		return fmt.Errorf("marshaling observed dependencies: %v", err)
+		return fmt.Errorf("marshaling observed endpoints: %v", err)
 	}
 
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
@@ -92,10 +92,10 @@ func (c *Client) PostObservedDependencies(od *catalogpb.ObservedDependencies) er
 	return nil
 }
 
-// DeleteObservedDependencies removes all observations previously reported under
-// detectedBy via DELETE {baseURL}/catalog/observed-dependencies/{detectedBy}.
-func (c *Client) DeleteObservedDependencies(detectedBy string) error {
-	endpoint := c.baseURL + "/catalog/observed-dependencies/" + url.PathEscape(detectedBy)
+// DeleteObservedEndpoints removes all observations previously reported under
+// detectedBy via DELETE {baseURL}/catalog/observed-endpoints/{detectedBy}.
+func (c *Client) DeleteObservedEndpoints(detectedBy string) error {
+	endpoint := c.baseURL + "/catalog/observed-endpoints/" + url.PathEscape(detectedBy)
 	req, err := http.NewRequest(http.MethodDelete, endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("building request for %s: %v", endpoint, err)

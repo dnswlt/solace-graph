@@ -89,7 +89,7 @@ internal/spring/       app-context reading, placeholder resolution, binding extr
 internal/graph/        Application model + Build(): producer/consumer edge construction
 internal/report/       self-contained interactive HTML report (report -html)
 internal/swcat/        swcat catalog HTTP client, Component<->Application matching,
-                       and ObservedDependencies reporting
+                       and ObservedEndpoints reporting
 proto/swcat/...        vendored .proto (see below); generated via `make proto`
 internal/catalog/pb/   generated protobuf types for the swcat catalog API
 ```
@@ -107,29 +107,35 @@ Dependency direction: `graph` and `swcat` depend on `spring` and `maven`; `sprin
 (`match.go`: an explicit `maven.apache.org/coords` annotation, or a `groupId` annotation
 inherited Component → System → Domain, with the entity name as artifactId), and matches
 them to collected applications by GAV. It runs the same `graph.Build` over *all* collected
-apps and, per matched source Component, emits an `ObservedDependencies` message covering only
-the `"from"` (this-component-depends-on) edges: event matches as `CONSUMES`, request/reply
-matches as `CALLS`. Reporting is a **full idempotent sync**: sources
-with no dependencies still emit an empty message, clearing previously observed deps. Uploads
-by default; `-dry-run` only prints what would be sent.
+apps and, per matched source Component, emits an `ObservedEndpoints` message: one `Endpoint`
+per distinct (direction, kind, address) of its bindings, with the apps it was matched with as
+counterparts — in **both** directions, so each link appears in both components' reports and
+swcat needs no inverse lookup. swcat derives who depends on whom from direction and kind
+(inbound event or outbound request: the source depends on the counterpart). An inbound
+binding is a request (reply-serving) endpoint if a request binding matched it, since the
+replier's own config doesn't say so. Endpoints without counterparts are reported too.
+Reporting is a **full idempotent sync**: sources with no bindings still emit an empty
+message, clearing previously observed endpoints. Uploads by default; `-dry-run` only prints
+what would be sent.
 
-Unmatched apps are in the graph purely for diagnostics: they can never be a source, but an
-edge touching one is returned as a `swcat.DroppedDependency` rather than vanishing. Both
-orientations count — a missing *consumer* loses the dependency just as surely as a missing
-producer, since only matched Components are sources — so `dependencies` inspects the `"to"`
-matches too, and each dropped dependency is found once, from whichever end is matched.
+Unmatched apps can never be a source, but they are in the graph so that they show up as
+`external` counterparts (by Maven coordinates) instead of vanishing. The dependencies
+involving them are additionally returned as `swcat.DroppedDependency`, for the stdout list of
+what the catalog is missing. Both orientations count — a missing *consumer* loses the
+dependency just as surely as a missing producer — and each is found once, from whichever end
+is matched.
 Likewise `MatchResult.Unresolved` keeps the Components whose groupId could not be resolved.
 
 Several Components may legitimately resolve to the same coordinates (e.g. two entities for
 two live versions of the same binary). An application can only be reported as one Component,
 so the last match wins and the earlier ones are flagged `Match.Shadowed` — reported to the
 user, not silently dropped. Keep the pick where it is: `MatchComponents` decides, and
-`ObservedDependencies` skips shadowed matches explicitly rather than relying on map-overwrite
+`ObservedEndpoints` skips shadowed matches explicitly rather than relying on map-overwrite
 order.
 
 The command's stdout is a one-line match summary followed by sections for **what went wrong**
-only (unresolvable components, shadowed duplicates, modules missing from the catalog, dropped
-dependencies, rejected posts) — the successful mappings are printed only under
+only (unresolvable components, shadowed duplicates, modules missing from the catalog,
+dependencies involving those modules, rejected posts) — the successful mappings are printed only under
 `-dry-run`. Keep it that way: on a real catalog the successes are the bulk and the problems
 are what the user acts on.
 

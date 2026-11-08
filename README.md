@@ -49,8 +49,11 @@ sgraph report [-html <report.html>] <file> [<file>...]
 ### 3. Report to swcat
 
 `swcat` matches the collected applications against the
-[swcat](https://github.com/dnswlt/swcat) service catalog by Maven coordinates and reports
-the observed dependencies between matched components.
+[swcat](https://github.com/dnswlt/swcat) service catalog by Maven coordinates and reports,
+per matched component, its observed endpoints: each topic it publishes to or subscribes
+to, with the applications on the other end as counterparts (catalog components, or Maven
+coordinates for modules not in the catalog). swcat shows them as a table on the
+component's page and lints the dependencies they imply against the catalog.
 
 ```bash
 sgraph swcat [-url <swcat-url>] [-dry-run | -delete] <file> [<file>...]
@@ -64,9 +67,9 @@ sgraph swcat [-url <swcat-url>] [-dry-run | -delete] <file> [<file>...]
 
 It prints a one-line match summary and then reports only what went wrong, naming the
 entities involved: catalog components with no resolvable Maven groupId (they can never
-match), collected applications missing from the catalog, dependencies that could not be
-reported because the producing application is one of those missing components, catalog
-components that no collected application matched, and any messages swcat rejected. The
+match), collected applications missing from the catalog, dependencies on or of those
+missing applications (reported to swcat only as external counterparts), and any messages
+swcat rejected. The
 mappings that *did* work are listed only under `-dry-run`.
 
 ## Example workflow
@@ -124,5 +127,6 @@ Pass `-v` before the command for debug logging, e.g. `sgraph -v collect ...`.
    them as plain topics (placeholders allowed) to have them matched.
 5. **Graph construction**: one node per application, with directed edges representing
    dependencies. A consumer depends on the producer of a topic, but a requester depends on
-   the replier, i.e. the consumer of its request topic. `swcat` reports the former as
-   *consumes*, the latter as *calls*.
+   the replier, i.e. the consumer of its request topic. `swcat` reports each endpoint with
+   its direction and kind (event or request), from which swcat derives who depends on
+   whom.

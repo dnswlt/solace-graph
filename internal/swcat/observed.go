@@ -1,20 +1,25 @@
 package swcat
 
 import (
+	"cmp"
+	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
 	catalogpb "github.com/dnswlt/solace-graph/internal/catalog/pb"
 	"github.com/dnswlt/solace-graph/internal/graph"
 	"github.com/dnswlt/solace-graph/internal/maven"
+	"github.com/dnswlt/solace-graph/internal/spring"
 )
 
 // DetectedBy is the tool label recorded on every observation we report.
 const DetectedBy = "solace-graph"
 
-// DroppedDependency is a dependency that was detected but cannot be reported,
-// because one of its two ends has no catalog Component: either there is no
-// entity to attribute the observation to, or none to point it at.
+// DroppedDependency is a dependency that was detected but involves an
+// application without a catalog Component. It is still reported, as an
+// external counterpart of the matched end's endpoint, but it can never appear
+// in the catalog as a relationship between two Components.
 //
 // For request/reply, the requester is the Consumer (it depends on the replier)
 // and the replier the Producer.
@@ -28,20 +33,22 @@ type DroppedDependency struct {
 	Missing maven.GAV
 }
 
-// ObservedDependencies runs the dependency analysis over the collected
-// applications and converts, for each matched source Component, its
-// dependencies on other matched Components into an ObservedDependencies
-// message.
+// ObservedEndpoints runs the dependency analysis over the collected
+// applications and builds, for each matched source Component, an
+// ObservedEndpoints message: one Endpoint per distinct (direction, kind,
+// address) of its bindings, with the applications each endpoint was matched
+// with as its counterparts. Counterparts with a catalog Component are reported
+// as entities, the others as external (by Maven coordinates).
 //
 // One message is returned per matched source Component, including sources with
-// no dependencies: reporting an empty list clears any dependencies previously
+// no bindings: reporting an empty list clears any endpoints previously
 // observed by this tool, so the result is a full, idempotent sync.
 //
 // The graph is built over the unmatched applications as well, even though they
-// can never be a source. That way a dependency on an application that is
-// missing from the catalog is returned as a DroppedDependency instead of
-// silently disappearing from the report.
-func ObservedDependencies(res MatchResult) ([]*catalogpb.ObservedDependencies, []DroppedDependency) {
+// can never be a source, so they show up as external counterparts. The
+// dependencies involving them are also returned as DroppedDependency, for the
+// caller to list what the catalog is missing.
+func ObservedEndpoints(res MatchResult) ([]*catalogpb.ObservedEndpoints, []DroppedDependency) {
 	apps := make([]graph.Application, 0, len(res.Matches)+len(res.UnmatchedApps))
 	compByGAV := make(map[maven.GAV]*catalogpb.Entity, len(res.Matches))
 	seen := make(map[maven.GAV]bool, cap(apps))
@@ -65,139 +72,221 @@ func ObservedDependencies(res MatchResult) ([]*catalogpb.ObservedDependencies, [
 
 	nodes := graph.Build(apps)
 
-	msgs := make([]*catalogpb.ObservedDependencies, 0, len(nodes))
+	msgs := make([]*catalogpb.ObservedEndpoints, 0, len(nodes))
 	var dropped []DroppedDependency
 	for _, node := range nodes {
 		src, ok := compByGAV[node.App.GAV]
 		if !ok {
 			continue // an unmatched application: no Component to report it for
 		}
-		deps, drops := dependencies(node.App.GAV, node.Edges, compByGAV)
-		msgs = append(msgs, &catalogpb.ObservedDependencies{
-			Source:       componentRef(src),
-			DetectedBy:   DetectedBy,
-			Dependencies: deps,
+		msgs = append(msgs, &catalogpb.ObservedEndpoints{
+			Source:     componentRef(src),
+			DetectedBy: DetectedBy,
+			Endpoints:  endpoints(node, compByGAV),
 		})
-		dropped = append(dropped, drops...)
+		dropped = append(dropped, droppedDependencies(node, compByGAV)...)
 	}
 	return msgs, dropped
 }
 
-// dependencies converts a source node's edges into ObservedDependency entries.
-// Edges whose neighbor is not a matched Component are returned as
-// DroppedDependency instead, so the caller can report what could not be synced.
-//
-// Only the depending direction ("from" matches) is reported. graph.Build produces
-// symmetric edges: whenever A depends on B, that same relationship surfaces as a
-// "from" match on A's node and a "to" match on B's node. Reporting the "from" side
-// only records each dependency exactly once, attributed to the component that
-// depends on the other: a consumer needs the producer's messages (CONSUMES), a
-// request/reply requester needs the replier's answers (CALLS).
-//
-// The "to" matches are still examined, for their own dependency is lost just as
-// easily: if the neighbor depending on local has no Component, no node will ever
-// report that dependency, since only matched Components are sources. Each dropped
-// dependency is found exactly once, from whichever of its two ends is a matched
-// Component.
-func dependencies(local maven.GAV, edges []graph.Edge, compByGAV map[maven.GAV]*catalogpb.Entity) ([]*catalogpb.ObservedDependency, []DroppedDependency) {
-	var deps []*catalogpb.ObservedDependency
-	var dropped []DroppedDependency
-	for _, e := range edges {
-		// Evidence is the destination of the depending side's own binding: the
-		// topic a consumer subscribes to, or a requester sends its requests to.
-		// The other side names the same channel and would be redundant. Local is
-		// the depending side of a "from" match, the neighbor of a "to" match.
-		consumes := make(map[string]bool)   // local consumes from the neighbor
-		calls := make(map[string]bool)      // local sends requests to the neighbor
-		dependents := make(map[string]bool) // the neighbor depends on local
-		for _, m := range e.Matches {
-			switch {
-			case m.Direction != graph.DirFrom:
-				dependents[m.Remote.Destination] = true
-			case m.Kind == graph.KindRequest:
-				calls[m.Local.Destination] = true
-			default:
-				consumes[m.Local.Destination] = true
-			}
-		}
-
-		neighbor, matched := compByGAV[e.To]
-		if !matched {
-			if ev := sortedKeys(consumes, calls); len(ev) > 0 {
-				dropped = append(dropped, DroppedDependency{
-					Consumer: local, Producer: e.To, Topics: ev, Missing: e.To,
-				})
-			}
-			// A matched neighbor would report this itself, from its own node.
-			if ev := sortedKeys(dependents); len(ev) > 0 {
-				dropped = append(dropped, DroppedDependency{
-					Consumer: e.To, Producer: local, Topics: ev, Missing: e.To,
-				})
-			}
-			continue
-		}
-		for _, r := range []struct {
-			relation catalogpb.DependencyRelation
-			topics   map[string]bool
-		}{
-			{catalogpb.DependencyRelation_DEPENDENCY_RELATION_CONSUMES, consumes},
-			{catalogpb.DependencyRelation_DEPENDENCY_RELATION_CALLS, calls},
-		} {
-			if ev := sortedKeys(r.topics); len(ev) > 0 {
-				deps = append(deps, &catalogpb.ObservedDependency{
-					Target:   componentRef(neighbor),
-					Relation: r.relation,
-					Evidence: ev,
-				})
-			}
-		}
-	}
-	return deps, dropped
+// endpointKey identifies an Endpoint: bindings sharing it are merged into one.
+type endpointKey struct {
+	direction catalogpb.EndpointDirection
+	kind      catalogpb.EndpointKind
+	address   string
 }
 
-// sortedKeys returns the distinct non-empty keys of the given sets, sorted for
-// deterministic output.
-func sortedKeys(sets ...map[string]bool) []string {
-	union := make(map[string]bool)
-	for _, set := range sets {
-		for k := range set {
-			if k != "" {
-				union[k] = true
+// bindingKey identifies a binding of the node's application.
+type bindingKey struct {
+	name, destination string
+}
+
+// endpoints converts the node's bindings into Endpoints, with the node's edge
+// matches as their counterparts.
+func endpoints(node graph.Node, compByGAV map[maven.GAV]*catalogpb.Entity) []*catalogpb.Endpoint {
+	// An inbound binding serves requests if a request binding matched it: the
+	// replier's own configuration doesn't say so.
+	serves := make(map[bindingKey]bool)
+	for _, e := range node.Edges {
+		for _, m := range e.Matches {
+			if m.Kind == graph.KindRequest && m.Local.Direction == spring.BindingIn {
+				serves[bindingKey{m.Local.BindingName, m.Local.Destination}] = true
 			}
 		}
 	}
-	if len(union) == 0 {
-		return nil
+	keyOf := func(b spring.StreamBinding) (endpointKey, bool) {
+		k := endpointKey{address: b.Destination, kind: catalogpb.EndpointKind_ENDPOINT_KIND_EVENT}
+		switch b.Direction {
+		case spring.BindingIn:
+			k.direction = catalogpb.EndpointDirection_ENDPOINT_DIRECTION_INBOUND
+			if serves[bindingKey{b.BindingName, b.Destination}] {
+				k.kind = catalogpb.EndpointKind_ENDPOINT_KIND_REQUEST
+			}
+		case spring.BindingOut:
+			k.direction = catalogpb.EndpointDirection_ENDPOINT_DIRECTION_OUTBOUND
+			if b.Request {
+				k.kind = catalogpb.EndpointKind_ENDPOINT_KIND_REQUEST
+			}
+		default:
+			return k, false // no direction known: not a reportable endpoint
+		}
+		return k, true
 	}
-	out := make([]string, 0, len(union))
-	for k := range union {
-		out = append(out, k)
+
+	byKey := make(map[endpointKey]*catalogpb.Endpoint)
+	for _, b := range node.App.Bindings {
+		k, ok := keyOf(b)
+		if !ok {
+			continue
+		}
+		ep := byKey[k]
+		if ep == nil {
+			ep = &catalogpb.Endpoint{Address: k.address, Direction: k.direction, Kind: k.kind, Technology: b.BinderType}
+			byKey[k] = ep
+		}
+		if !slices.Contains(ep.Names, b.BindingName) {
+			ep.Names = append(ep.Names, b.BindingName)
+		}
+	}
+
+	type cpKey struct{ entity, external, address string }
+	seenCP := make(map[*catalogpb.Endpoint]map[cpKey]bool)
+	for _, e := range node.Edges {
+		comp, inCatalog := compByGAV[e.To]
+		for _, m := range e.Matches {
+			k, ok := keyOf(m.Local)
+			if !ok {
+				continue
+			}
+			ep := byKey[k]
+			cp := &catalogpb.Counterpart{}
+			if inCatalog {
+				cp.Entity = componentRef(comp)
+			} else {
+				cp.External = e.To.GroupId + ":" + e.To.ArtifactId
+			}
+			if m.Remote.Destination != m.Local.Destination {
+				cp.Address = m.Remote.Destination
+			}
+			ck := cpKey{cp.GetEntity().GetName(), cp.External, cp.Address}
+			if seenCP[ep] == nil {
+				seenCP[ep] = make(map[cpKey]bool)
+			}
+			if seenCP[ep][ck] {
+				continue // matched through several bindings of the same endpoint
+			}
+			seenCP[ep][ck] = true
+			ep.Counterparts = append(ep.Counterparts, cp)
+		}
+	}
+
+	out := make([]*catalogpb.Endpoint, 0, len(byKey))
+	for _, ep := range byKey {
+		sort.Strings(ep.Names)
+		slices.SortFunc(ep.Counterparts, func(a, b *catalogpb.Counterpart) int {
+			return cmp.Or(
+				cmp.Compare(a.GetEntity().GetName(), b.GetEntity().GetName()),
+				cmp.Compare(a.External, b.External),
+				cmp.Compare(a.Address, b.Address),
+			)
+		})
+		out = append(out, ep)
+	}
+	slices.SortFunc(out, func(a, b *catalogpb.Endpoint) int {
+		return cmp.Or(
+			cmp.Compare(a.Address, b.Address),
+			cmp.Compare(a.Direction, b.Direction),
+			cmp.Compare(a.Kind, b.Kind),
+		)
+	})
+	return out
+}
+
+// droppedDependencies returns the dependencies between the node's application
+// and applications without a catalog Component, in either direction. A
+// dependency between a matched and an unmatched application is only ever seen
+// from the matched end, so each is found exactly once.
+func droppedDependencies(node graph.Node, compByGAV map[maven.GAV]*catalogpb.Entity) []DroppedDependency {
+	local := node.App.GAV
+	var dropped []DroppedDependency
+	for _, e := range node.Edges {
+		if _, matched := compByGAV[e.To]; matched {
+			continue
+		}
+		// Evidence is the destination of the depending side's own binding: the
+		// topic a consumer subscribes to, or a requester sends its requests to.
+		dependsOn := make(map[string]bool)  // local depends on the neighbor
+		dependents := make(map[string]bool) // the neighbor depends on local
+		for _, m := range e.Matches {
+			if m.Direction == graph.DirFrom {
+				dependsOn[m.Local.Destination] = true
+			} else {
+				dependents[m.Remote.Destination] = true
+			}
+		}
+		if ev := sortedKeys(dependsOn); len(ev) > 0 {
+			dropped = append(dropped, DroppedDependency{Consumer: local, Producer: e.To, Topics: ev, Missing: e.To})
+		}
+		if ev := sortedKeys(dependents); len(ev) > 0 {
+			dropped = append(dropped, DroppedDependency{Consumer: e.To, Producer: local, Topics: ev, Missing: e.To})
+		}
+	}
+	return dropped
+}
+
+// sortedKeys returns the non-empty keys of set, sorted for deterministic output.
+func sortedKeys(set map[string]bool) []string {
+	var out []string
+	for k := range set {
+		if k != "" {
+			out = append(out, k)
+		}
 	}
 	sort.Strings(out)
 	return out
 }
 
-// Summary renders the dependencies of one ObservedDependencies message as a
-// compact "relation:target" list, e.g. "consumes:a, produces:b".
-func Summary(od *catalogpb.ObservedDependencies) string {
-	parts := make([]string, 0, len(od.GetDependencies()))
-	for _, d := range od.GetDependencies() {
-		parts = append(parts, relationLabel(d.GetRelation())+":"+d.GetTarget().GetName())
+// Summary renders one ObservedEndpoints message as a compact line: the number
+// of endpoints, and the catalog Components the source depends on and that
+// depend on it, e.g. "12 endpoints; depends on a, b; used by c".
+func Summary(oe *catalogpb.ObservedEndpoints) string {
+	dependsOn := make(map[string]bool)
+	usedBy := make(map[string]bool)
+	external := 0
+	for _, ep := range oe.GetEndpoints() {
+		in := ep.GetDirection() == catalogpb.EndpointDirection_ENDPOINT_DIRECTION_INBOUND
+		request := ep.GetKind() == catalogpb.EndpointKind_ENDPOINT_KIND_REQUEST
+		for _, cp := range ep.GetCounterparts() {
+			name := cp.GetEntity().GetName()
+			if name == "" {
+				external++
+				continue
+			}
+			if in != request { // inbound event or outbound request
+				dependsOn[name] = true
+			} else {
+				usedBy[name] = true
+			}
+		}
 	}
-	return strings.Join(parts, ", ")
+	parts := []string{plural(len(oe.GetEndpoints()), "endpoint")}
+	if ns := sortedKeys(dependsOn); len(ns) > 0 {
+		parts = append(parts, "depends on "+strings.Join(ns, ", "))
+	}
+	if ns := sortedKeys(usedBy); len(ns) > 0 {
+		parts = append(parts, "used by "+strings.Join(ns, ", "))
+	}
+	if external > 0 {
+		parts = append(parts, plural(external, "external counterpart"))
+	}
+	return strings.Join(parts, "; ")
 }
 
-func relationLabel(r catalogpb.DependencyRelation) string {
-	switch r {
-	case catalogpb.DependencyRelation_DEPENDENCY_RELATION_CONSUMES:
-		return "consumes"
-	case catalogpb.DependencyRelation_DEPENDENCY_RELATION_PRODUCES:
-		return "produces"
-	case catalogpb.DependencyRelation_DEPENDENCY_RELATION_CALLS:
-		return "calls"
-	default:
-		return "depends-on"
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
 	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }
 
 func componentRef(e *catalogpb.Entity) *catalogpb.Ref {

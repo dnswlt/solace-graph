@@ -13,9 +13,9 @@ import (
 
 // Swcat matches swcat catalog Component entities against the Applications
 // collected from the Maven/Spring sources (as produced by the `collect`
-// command), derives the dependencies between matched Components from the
-// Spring Cloud Stream bindings, and reports them to swcat as observed
-// dependencies (one POST per source Component).
+// command), and reports each matched Component's endpoints (its Spring Cloud
+// Stream bindings) to swcat as observed endpoints, with the applications each
+// endpoint connects to as its counterparts (one POST per source Component).
 //
 // By default it uploads the observations. Pass -dry-run to only print what it
 // would send without contacting swcat, or -delete to remove all observations
@@ -31,7 +31,7 @@ func Swcat(out io.Writer, args []string) error {
 
 	if *del {
 		client := swcat.NewClient(*url)
-		if err := client.DeleteObservedDependencies(swcat.DetectedBy); err != nil {
+		if err := client.DeleteObservedEndpoints(swcat.DetectedBy); err != nil {
 			return err
 		}
 		fmt.Fprintf(out, "deleted observations detected by %q from %s\n", swcat.DetectedBy, *url)
@@ -59,7 +59,7 @@ func Swcat(out io.Writer, args []string) error {
 	slog.Info("retrieved catalog entities", "count", len(entities), "url", *url)
 
 	res := swcat.MatchComponents(entities, apps)
-	obs, dropped := swcat.ObservedDependencies(res)
+	obs, dropped := swcat.ObservedEndpoints(res)
 
 	var matched int
 	reportedAs := make(map[string]string) // coords -> name of the component that won
@@ -102,8 +102,10 @@ func Swcat(out io.Writer, args []string) error {
 	}
 	printProblems(out, "scanned Maven modules that no catalog component claims", appOnly)
 
-	// A dropped dependency is missing either its producer or its consumer; the
-	// two cases are listed apart so each line needs no marker to be read.
+	// A dependency on an uncatalogued module is reported as an external
+	// counterpart, but can never become a relationship in the catalog. It is
+	// missing either its producer or its consumer; the two cases are listed
+	// apart so each line needs no marker to be read.
 	var noProducer, noConsumer []string
 	for _, d := range dropped {
 		line := fmt.Sprintf("%s:%s -> %s:%s [%s]",
@@ -115,23 +117,23 @@ func Swcat(out io.Writer, args []string) error {
 			noConsumer = append(noConsumer, line)
 		}
 	}
-	printProblems(out, "detected dependencies dropped, the producing module has no catalog component", noProducer)
-	printProblems(out, "detected dependencies dropped, the consuming module has no catalog component", noConsumer)
+	printProblems(out, "detected dependencies on modules without a catalog component (the producing side)", noProducer)
+	printProblems(out, "detected dependencies of modules without a catalog component (the consuming side)", noConsumer)
 
-	var withDeps, totalDeps int
-	for _, od := range obs {
-		if n := len(od.GetDependencies()); n > 0 {
-			withDeps++
-			totalDeps += n
+	var withEndpoints, totalEndpoints int
+	for _, oe := range obs {
+		if n := len(oe.GetEndpoints()); n > 0 {
+			withEndpoints++
+			totalEndpoints += n
 		}
 	}
-	fmt.Fprintf(out, "\nreporting %d dependencies of %d source components (%d messages, the rest clearing previous observations)\n",
-		totalDeps, withDeps, len(obs))
+	fmt.Fprintf(out, "\nreporting %d endpoints of %d source components (%d messages, the rest clearing previous observations)\n",
+		totalEndpoints, withEndpoints, len(obs))
 
 	if *dryRun {
-		for _, od := range obs {
-			if len(od.GetDependencies()) > 0 {
-				fmt.Fprintf(out, "  %s: %s\n", od.GetSource().GetName(), swcat.Summary(od))
+		for _, oe := range obs {
+			if len(oe.GetEndpoints()) > 0 {
+				fmt.Fprintf(out, "  %s: %s\n", oe.GetSource().GetName(), swcat.Summary(oe))
 			}
 		}
 		fmt.Fprintf(out, "\ndry run: nothing sent to %s (omit -dry-run to upload)\n", *url)
@@ -139,10 +141,10 @@ func Swcat(out io.Writer, args []string) error {
 	}
 
 	var failed []string
-	for _, od := range obs {
-		if err := client.PostObservedDependencies(od); err != nil {
-			slog.Debug("failed to post observed dependencies", "source", od.GetSource().GetName(), "err", err)
-			failed = append(failed, fmt.Sprintf("%s: %v", od.GetSource().GetName(), err))
+	for _, oe := range obs {
+		if err := client.PostObservedEndpoints(oe); err != nil {
+			slog.Debug("failed to post observed endpoints", "source", oe.GetSource().GetName(), "err", err)
+			failed = append(failed, fmt.Sprintf("%s: %v", oe.GetSource().GetName(), err))
 		}
 	}
 	fmt.Fprintf(out, "\nposted %d/%d messages to %s\n", len(obs)-len(failed), len(obs), *url)
