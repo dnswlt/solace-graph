@@ -347,7 +347,13 @@ func LogUnresolvedPlaceholders(ctxDir string, bindings []StreamBinding) {
 // bindings are marked Request, and the literal topicPatterns of a mapping become
 // additional request bindings, since such requests have no static destination.
 func StreamBindings(props map[string]string) []StreamBinding {
-	defaultBinder, _ := lookupRelaxed(props, "spring.cloud.stream.default-binder")
+	// The default binder can be set as a default binding property
+	// (spring.cloud.stream.default.binder), which takes precedence like any binding
+	// property, or globally (spring.cloud.stream.default-binder).
+	defaultBinder, ok := lookupRelaxed(props, "spring.cloud.stream.default.binder")
+	if !ok {
+		defaultBinder, _ = lookupRelaxed(props, "spring.cloud.stream.default-binder")
+	}
 	binderTypeOf := func(bindingName string) string {
 		// Resolve the binding's binder name (falling back to the default binder), then
 		// map it to its technology type. The binder name is user-chosen and not kept.
@@ -500,7 +506,7 @@ var regexSyntax = regexp.MustCompile(`[*+?\\\[\](){}|^$]`)
 // isRegexPattern reports whether a request/reply topic pattern uses regex syntax,
 // ignoring unresolved ${...} placeholders.
 func isRegexPattern(p string) bool {
-	return regexSyntax.MatchString(placeholderRe.ReplaceAllString(p, ""))
+	return regexSyntax.MatchString(replacePlaceholders(p, ""))
 }
 
 // splitDestinations splits a comma-separated destination list, ignoring commas inside
@@ -596,11 +602,31 @@ func TopicLevels(topic string, syntax TopicSyntax) []string {
 	if strings.Contains(topic, "${replyTopicWithWildcards|") {
 		return nil
 	}
-	if placeholderRe.ReplaceAllString(topic, "") == "" {
+	if replacePlaceholders(topic, "") == "" {
 		return nil
 	}
-	normalized := placeholderRe.ReplaceAllString(topic, "*")
+	normalized := replacePlaceholders(topic, "*")
 	return strings.Split(normalized, syntax.separator())
+}
+
+// innermostPlaceholderRe matches a placeholder that contains no other placeholder.
+var innermostPlaceholderRe = regexp.MustCompile(`\$\{[^${}]*\}`)
+
+// replacePlaceholders replaces every unresolved placeholder in s with repl,
+// including nested ones such as "${map.${KEY}:${KEY}}", which are replaced as a
+// whole. placeholderRe alone would stop at the first '}' and leave a fragment.
+func replacePlaceholders(s, repl string) string {
+	// Replace innermost placeholders with a marker first, so the enclosing one
+	// becomes innermost in the next round; then substitute the marker.
+	const marker = "\x00"
+	for {
+		next := innermostPlaceholderRe.ReplaceAllString(s, marker)
+		if next == s {
+			break
+		}
+		s = next
+	}
+	return strings.ReplaceAll(s, marker, repl)
 }
 
 // MatchLevels compares consumer topic levels against producer topic levels.

@@ -389,6 +389,25 @@ func TestStreamBindingsBinderType(t *testing.T) {
 			wantBinderType: "kafka",
 		},
 		{
+			name: "default binder as default binding property",
+			props: map[string]string{
+				"spring.cloud.stream.bindings.myBinding-in-0.destination": "some/topic",
+				"spring.cloud.stream.default.binder":                      "solaceBinder",
+				"spring.cloud.stream.binders.solaceBinder.type":           "solace",
+			},
+			wantBinderType: "solace",
+		},
+		{
+			name: "default binding property beats global default binder",
+			props: map[string]string{
+				"spring.cloud.stream.bindings.myBinding-in-0.destination": "some/topic",
+				"spring.cloud.stream.default.binder":                      "solaceBinder",
+				"spring.cloud.stream.default-binder":                      "kafka",
+				"spring.cloud.stream.binders.solaceBinder.type":           "solace",
+			},
+			wantBinderType: "solace",
+		},
+		{
 			name: "no binder configured",
 			props: map[string]string{
 				"spring.cloud.stream.bindings.myBinding-in-0.destination": "some/topic",
@@ -613,6 +632,26 @@ func TestIsRegexPattern(t *testing.T) {
 	for _, tt := range tests {
 		if got := isRegexPattern(tt.pattern); got != tt.want {
 			t.Errorf("isRegexPattern(%q) = %v, want %v", tt.pattern, got, tt.want)
+		}
+	}
+}
+
+func TestTopicLevelsNestedPlaceholders(t *testing.T) {
+	tests := []struct {
+		topic  string
+		syntax TopicSyntax
+		want   []string
+	}{
+		{"a/${X}/b", SyntaxSolace, []string{"a", "*", "b"}},
+		{"a/${X}${Y}/b", SyntaxSolace, []string{"a", "**", "b"}},
+		// A nested placeholder (with a default) is one wildcard, not a fragment.
+		{"export.${map.${P}:${P}}.anschluss", SyntaxDotted, []string{"export", "*", "anschluss"}},
+		// Only placeholders, however nested: no structure, not matchable.
+		{"${topic-by-profile.${P}.efa}", SyntaxDotted, nil},
+	}
+	for _, tt := range tests {
+		if got := TopicLevels(tt.topic, tt.syntax); !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("TopicLevels(%q) = %q, want %q", tt.topic, got, tt.want)
 		}
 	}
 }
