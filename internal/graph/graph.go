@@ -27,17 +27,39 @@ func (a *Application) Sort() {
 	})
 }
 
+// Match directions, from the point of view of the node's (local) application.
+const (
+	// DirFrom: the local application depends on the remote one. It consumes the
+	// remote's messages, or (for KindRequest) sends requests the remote replies to.
+	DirFrom = "from"
+	// DirTo: the remote application depends on the local one.
+	DirTo = "to"
+	// DirBoth: an edge with matches in both directions.
+	DirBoth = "both"
+)
+
+// Match kinds.
+const (
+	// KindEvent is a plain publish/subscribe match: the consumer depends on the
+	// producer.
+	KindEvent = "event"
+	// KindRequest is a request/reply match: the producing side sends requests
+	// (spring.StreamBinding.Request) and depends on the consuming side, the replier.
+	KindRequest = "request"
+)
+
 // BindingMatch describes a specific link between the current application and another one.
 type BindingMatch struct {
-	Direction string               `json:"direction"` // "from" if remote produces, "to" if local produces
+	Direction string               `json:"direction"` // DirFrom if local depends on remote, DirTo otherwise
+	Kind      string               `json:"kind"`      // KindEvent or KindRequest
 	Local     spring.StreamBinding `json:"local"`     // binding of the node's application
 	Remote    spring.StreamBinding `json:"remote"`    // binding of the other application
 }
 
 // Edge represents a dependency on another application, including the reason (matching bindings).
 type Edge struct {
-	To        maven.GAV      `json:"to"`        // GAV of the depended-on application
-	Direction string         `json:"direction"` // "from", "to", or "both"
+	To        maven.GAV      `json:"to"`        // GAV of the other application
+	Direction string         `json:"direction"` // DirFrom, DirTo, or DirBoth
 	Matches   []BindingMatch `json:"matches"`
 }
 
@@ -63,6 +85,8 @@ type preparedApp struct {
 // A dependency (edge) exists from application A to B if A has an input binding whose
 // topic matches an output binding of B on the same binder technology (Solace, Kafka,
 // TIBCO RV, ...); bindings of different technologies never match.
+// Request/reply reverses this: if B's output binding is a request binding, B
+// depends on A (the replier) rather than A on B.
 // It assumes that the input list contains unique applications by GAV.
 func Build(apps []Application) []Node {
 	sort.Slice(apps, func(i, j int) bool {
@@ -106,34 +130,49 @@ func Build(apps []Application) []Node {
 			}
 
 			var fromEdge, toEdge *Edge
+			// add records a match on the edge for its dependency direction.
+			add := func(dir, kind string, local, remote spring.StreamBinding) {
+				e := &fromEdge
+				if dir == DirTo {
+					e = &toEdge
+				}
+				if *e == nil {
+					*e = &Edge{To: other.app.GAV, Direction: dir}
+				}
+				(*e).Matches = append((*e).Matches, BindingMatch{Direction: dir, Kind: kind, Local: local, Remote: remote})
+			}
 
-			// Current app consumes FROM other app (pa.in matches other.out)
+			// Current app consumes what the other app produces (pa.in matches other.out):
+			// pa depends on other, unless other is sending requests for pa to answer.
 			for _, inB := range pa.in {
 				for _, outB := range other.out {
 					if inB.syntax == outB.syntax && spring.MatchLevels(inB.levels, outB.levels) {
-						if fromEdge == nil {
-							fromEdge = &Edge{To: other.app.GAV, Direction: "from"}
+						if outB.binding.Request {
+							add(DirTo, KindRequest, inB.binding, outB.binding)
+						} else {
+							add(DirFrom, KindEvent, inB.binding, outB.binding)
 						}
-						fromEdge.Matches = append(fromEdge.Matches, BindingMatch{Direction: "from", Local: inB.binding, Remote: outB.binding})
 					}
 				}
 			}
 
-			// Current app produces TO other app (pa.out matches other.in)
+			// Other app consumes what the current app produces (pa.out matches other.in):
+			// other depends on pa, unless pa is sending requests for other to answer.
 			for _, outB := range pa.out {
 				for _, inB := range other.in {
 					if inB.syntax == outB.syntax && spring.MatchLevels(inB.levels, outB.levels) {
-						if toEdge == nil {
-							toEdge = &Edge{To: other.app.GAV, Direction: "to"}
+						if outB.binding.Request {
+							add(DirFrom, KindRequest, outB.binding, inB.binding)
+						} else {
+							add(DirTo, KindEvent, outB.binding, inB.binding)
 						}
-						toEdge.Matches = append(toEdge.Matches, BindingMatch{Direction: "to", Local: outB.binding, Remote: inB.binding})
 					}
 				}
 			}
 
 			switch {
 			case fromEdge != nil && toEdge != nil:
-				fromEdge.Direction = "both"
+				fromEdge.Direction = DirBoth
 				fromEdge.Matches = append(fromEdge.Matches, toEdge.Matches...)
 				edgeMap[other.app.GAV] = fromEdge
 			case fromEdge != nil:

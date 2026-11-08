@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -39,6 +40,10 @@ type StreamBinding struct {
 	Direction   BindingDirection `json:"direction"`   // "in" or "out"
 	Destination string           `json:"destination"` // topic/queue name
 	BinderType  string           `json:"binderType"`  // binder technology, e.g. "solace", "kafka", "rabbit"
+	// Request marks an output binding that sends request/reply requests: the
+	// application depends on whoever consumes Destination (the replier), not the
+	// other way round as for a plain producer.
+	Request bool `json:"request,omitempty"`
 }
 
 // ImportResolver resolves a spring.config.import location (with the optional:/classpath:/
@@ -146,14 +151,12 @@ func flattenValue(v any, prefix string, result map[string]string) {
 		}
 	case []any:
 		// Use the next unoccupied index rather than the sequential one, so that
-		// list items from multiple files (e.g. spring.config.import lists) are
-		// all preserved instead of being silently dropped by first-wins.
+		// list items from multiple files (e.g. spring.config.import lists, or
+		// request/reply bindingMapping lists spread over profile files) are all
+		// preserved instead of being silently dropped by first-wins.
 		idx := 0
 		for _, child := range val {
-			for {
-				if _, exists := result[fmt.Sprintf("%s[%d]", prefix, idx)]; !exists {
-					break
-				}
+			for listIndexOccupied(result, fmt.Sprintf("%s[%d]", prefix, idx)) {
 				idx++
 			}
 			flattenValue(child, fmt.Sprintf("%s[%d]", prefix, idx), result)
@@ -166,6 +169,21 @@ func flattenValue(v any, prefix string, result map[string]string) {
 			result[prefix] = fmt.Sprintf("%v", val)
 		}
 	}
+}
+
+// listIndexOccupied reports whether the list item key (e.g. "a.b[2]") is already
+// taken. A scalar item occupies the key itself; a map or list item only creates
+// nested keys ("a.b[2].c", "a.b[2][0]"), which must count as well.
+func listIndexOccupied(result map[string]string, key string) bool {
+	if _, ok := result[key]; ok {
+		return true
+	}
+	for k := range result {
+		if strings.HasPrefix(k, key+".") || strings.HasPrefix(k, key+"[") {
+			return true
+		}
+	}
+	return false
 }
 
 // anImport is a parsed spring.config.import location.
@@ -324,8 +342,29 @@ func LogUnresolvedPlaceholders(ctxDir string, bindings []StreamBinding) {
 // StreamBindings extracts all Spring Cloud Stream bindings from a flattened properties map.
 // It returns one StreamBinding per destination, splitting comma-separated consumer
 // destinations and excluding request/reply reply-topics.
+//
+// Request/reply requesters are recognised (see requestReplyConfig): their output
+// bindings are marked Request, and the literal topicPatterns of a mapping become
+// additional request bindings, since such requests have no static destination.
 func StreamBindings(props map[string]string) []StreamBinding {
 	defaultBinder, _ := lookupRelaxed(props, "spring.cloud.stream.default-binder")
+	binderTypeOf := func(bindingName string) string {
+		// Resolve the binding's binder name (falling back to the default binder), then
+		// map it to its technology type. The binder name is user-chosen and not kept.
+		binder, ok := lookupRelaxed(props, "spring.cloud.stream.bindings."+bindingName+".binder")
+		if !ok {
+			binder = defaultBinder
+		}
+		if binder == "" {
+			return ""
+		}
+		if t, ok := lookupRelaxed(props, "spring.cloud.stream.binders."+binder+".type"); ok {
+			return t
+		}
+		// No explicit type configured: the binder name is the type itself.
+		return binder
+	}
+	requesters, topicPatterns := requestReplyConfig(props)
 
 	var bindings []StreamBinding
 	for k, v := range props {
@@ -335,8 +374,10 @@ func StreamBindings(props map[string]string) []StreamBinding {
 		}
 		bindingName := m[1]
 		var direction BindingDirection
+		var request bool
 		if nm := bindingNamePattern.FindStringSubmatch(bindingName); nm != nil {
 			direction = BindingDirection(nm[2])
+			request = direction == BindingOut && requesters[nm[1]]
 		}
 		// Consumer bindings may subscribe to several comma-separated destinations;
 		// emit one binding per destination so each is matched as its own topic.
@@ -344,21 +385,7 @@ func StreamBindings(props map[string]string) []StreamBinding {
 		if direction == BindingIn {
 			dests = splitDestinations(v)
 		}
-		// Resolve the binding's binder name (falling back to the default binder), then
-		// map it to its technology type. The binder name is user-chosen and not kept.
-		binder, ok := lookupRelaxed(props, "spring.cloud.stream.bindings."+bindingName+".binder")
-		if !ok {
-			binder = defaultBinder
-		}
-		var binderType string
-		if binder != "" {
-			if t, ok := lookupRelaxed(props, "spring.cloud.stream.binders."+binder+".type"); ok {
-				binderType = t
-			} else {
-				// No explicit type configured: the binder name is the type itself.
-				binderType = binder
-			}
-		}
+		binderType := binderTypeOf(bindingName)
 		for _, d := range dests {
 			// Reply-topics are runtime-generated per-request queues. Filter each
 			// destination separately so real topics in the same list are retained.
@@ -370,10 +397,110 @@ func StreamBindings(props map[string]string) []StreamBinding {
 				Destination: d,
 				Direction:   direction,
 				BinderType:  binderType,
+				Request:     request,
+			})
+		}
+	}
+
+	// Requests sent to a destination chosen at runtime have no static destination;
+	// the mapping's topicPatterns are the only record of where they go.
+	for base, patterns := range topicPatterns {
+		bindingName := base + "-out-0"
+		binderType := binderTypeOf(bindingName)
+		for _, p := range patterns {
+			if isRegexPattern(p) {
+				// Regexes (e.g. ".*topo/Foo/request") are not topics; matching them
+				// would complicate topic matching for little gain. Skip them.
+				slog.Debug("spring: skipping request/reply topic pattern with regex syntax",
+					"binding", base, "pattern", p)
+				continue
+			}
+			if slices.ContainsFunc(bindings, func(b StreamBinding) bool {
+				return b.BindingName == bindingName && b.Destination == p
+			}) {
+				continue
+			}
+			bindings = append(bindings, StreamBinding{
+				BindingName: bindingName,
+				Destination: p,
+				Direction:   BindingOut,
+				BinderType:  binderType,
+				Request:     true,
 			})
 		}
 	}
 	return bindings
+}
+
+// requestReplyMappingKey matches a normalized (see normalizeKey) request/reply
+// binding-mapping entry: its binding name, or one of its topic patterns.
+var requestReplyMappingKey = regexp.MustCompile(`^spring\.cloud\.stream\.requestreply\.bindingmapping\[(\d+)\]\.(binding|topicpatterns(?:\[\d+\])?)$`)
+
+// requestReplyConfig finds the request/reply requesters configured in props. It
+// returns the base names (binding name without "-in-N"/"-out-N") of requester
+// functions, and the topic patterns declared per base name.
+//
+// A function is a requester if it appears in a
+// spring.cloud.stream.requestreply.bindingMapping entry, or if its input binding
+// subscribes to a ${replyTopicWithWildcards|...} reply topic.
+func requestReplyConfig(props map[string]string) (requesters map[string]bool, topicPatterns map[string][]string) {
+	type mapping struct {
+		binding  string
+		patterns []string
+	}
+	mappings := make(map[string]*mapping) // by list index
+	requesters = make(map[string]bool)
+	for k, v := range props {
+		if m := bindingDestinationKey.FindStringSubmatch(k); m != nil {
+			if nm := bindingNamePattern.FindStringSubmatch(m[1]); nm != nil &&
+				nm[2] == string(BindingIn) && strings.Contains(v, "${replyTopicWithWildcards|") {
+				requesters[nm[1]] = true
+			}
+			continue
+		}
+		m := requestReplyMappingKey.FindStringSubmatch(normalizeKey(k))
+		if m == nil {
+			continue
+		}
+		mp := mappings[m[1]]
+		if mp == nil {
+			mp = &mapping{}
+			mappings[m[1]] = mp
+		}
+		if m[2] == "binding" {
+			mp.binding = strings.TrimSpace(v)
+		} else {
+			// A scalar value may hold a comma-separated list, as Spring binds it.
+			for p := range strings.SplitSeq(v, ",") {
+				if p = strings.TrimSpace(p); p != "" {
+					mp.patterns = append(mp.patterns, p)
+				}
+			}
+		}
+	}
+	topicPatterns = make(map[string][]string)
+	for _, mp := range mappings {
+		if mp.binding == "" {
+			continue
+		}
+		requesters[mp.binding] = true
+		topicPatterns[mp.binding] = append(topicPatterns[mp.binding], mp.patterns...)
+	}
+	for base := range topicPatterns {
+		sort.Strings(topicPatterns[base])
+	}
+	return requesters, topicPatterns
+}
+
+// regexSyntax matches characters that only occur in a topic pattern if it is a
+// regular expression rather than a plain topic. '.' is deliberately absent: it is
+// a legitimate topic character (and a regex '.' matches a literal one anyway).
+var regexSyntax = regexp.MustCompile(`[*+?\\\[\](){}|^$]`)
+
+// isRegexPattern reports whether a request/reply topic pattern uses regex syntax,
+// ignoring unresolved ${...} placeholders.
+func isRegexPattern(p string) bool {
+	return regexSyntax.MatchString(placeholderRe.ReplaceAllString(p, ""))
 }
 
 // splitDestinations splits a comma-separated destination list, ignoring commas inside

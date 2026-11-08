@@ -348,7 +348,29 @@ const htmlTemplate = `
                                                 <div style="flex: 1; border-left: 1px solid var(--border-color); margin-top: 2px;"></div>
                                             </div>
                                             <div class="match-endpoints">
-                                                {{if eq .Direction "from"}}
+                                                {{if and (eq .Kind "request") (eq .Direction "from")}}
+                                                <div class="endpoint is-local">
+                                                    <span class="endpoint-label">Requester (Local)</span>
+                                                    <span class="topic">{{.Local.Destination}}</span>
+                                                    <span class="binding-sub">{{.Local.BindingName}}</span>
+                                                </div>
+                                                <div class="endpoint">
+                                                    <span class="endpoint-label">Replier (Remote)</span>
+                                                    <span class="topic">{{.Remote.Destination}}</span>
+                                                    <span class="binding-sub">{{.Remote.BindingName}}</span>
+                                                </div>
+                                                {{else if eq .Kind "request"}}
+                                                <div class="endpoint">
+                                                    <span class="endpoint-label">Requester (Remote)</span>
+                                                    <span class="topic">{{.Remote.Destination}}</span>
+                                                    <span class="binding-sub">{{.Remote.BindingName}}</span>
+                                                </div>
+                                                <div class="endpoint is-local">
+                                                    <span class="endpoint-label">Replier (Local)</span>
+                                                    <span class="topic">{{.Local.Destination}}</span>
+                                                    <span class="binding-sub">{{.Local.BindingName}}</span>
+                                                </div>
+                                                {{else if eq .Direction "from"}}
                                                 <div class="endpoint">
                                                     <span class="endpoint-label">Producer (Remote)</span>
                                                     <span class="topic">{{.Remote.Destination}}</span>
@@ -401,7 +423,7 @@ const htmlTemplate = `
                     {{range .App.Bindings}}
                         <tr>
                             <td>{{.BindingName}}</td>
-                            <td>{{.Direction}}</td>
+                            <td>{{.Direction}}{{if .Request}} (request){{end}}</td>
                             <td><code>{{.Destination}}</code></td>
                             <td>{{.BinderType}}</td>
                         </tr>

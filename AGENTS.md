@@ -52,6 +52,24 @@ lives in the code.
 - **Reply-topics are dropped at collection** (`spring.StreamBindings` skips
   `${replyTopicWithWildcards|...}`): per-request runtime queues, never real topics.
 
+- **Request/reply is tracked via the request topic, with reversed dependency.** A
+  requester's output binding is marked `StreamBinding.Request`
+  (`spring.requestReplyConfig`: named in a `requestreply.bindingMapping`, or its input
+  binding subscribes to a reply topic). In `graph.Build`, a match whose producing side is a
+  request binding means the *producer* depends on the consumer (the replier):
+  `BindingMatch.Kind == KindRequest`, and `DirFrom` always means "local depends on remote",
+  never just "remote produces". Literal `topicPatterns` become extra request bindings
+  (requests to runtime-chosen destinations have no static `destination`). Regex
+  `topicPatterns` are deliberately skipped: matching regexes against topics would
+  complicate matching for a handful of cases that can be written as plain topics instead.
+  Forwarding proxies (consume one request topic, republish to another) can't be recognised
+  from config and stay plain pub/sub — accepted.
+
+- **Lists of maps from several files are appended** (`flattenValue` /
+  `listIndexOccupied`): a map item only creates `prefix[i].field` keys, so the "next free
+  index" check must look for nested keys too, or later files' entries (e.g.
+  `bindingMapping` spread over profile files) collide and are dropped by first-wins.
+
 - **Binder technology drives matching** (`spring.TopicSyntaxFor`): read from
   `spring.cloud.stream.binders.<name>.type`, falling back to a structural guess from the
   destination when unknown. Bindings of different technologies never match.
@@ -90,7 +108,8 @@ Dependency direction: `graph` and `swcat` depend on `spring` and `maven`; `sprin
 inherited Component → System → Domain, with the entity name as artifactId), and matches
 them to collected applications by GAV. It runs the same `graph.Build` over *all* collected
 apps and, per matched source Component, emits an `ObservedDependencies` message covering only
-the `"from"` (this-component-consumes) edges. Reporting is a **full idempotent sync**: sources
+the `"from"` (this-component-depends-on) edges: event matches as `CONSUMES`, request/reply
+matches as `CALLS`. Reporting is a **full idempotent sync**: sources
 with no dependencies still emit an empty message, clearing previously observed deps. Uploads
 by default; `-dry-run` only prints what would be sent.
 
@@ -126,5 +145,6 @@ the local copy; run it only after syncing a new copy from swcat.
 - Go 1.25. Standard library + `gopkg.in/yaml.v3` + `google.golang.org/protobuf`.
 - Logging via `log/slog` to stderr; JSON results to stdout. `-v` enables debug logging.
 - Run `gofmt`, `go vet`, and `go test ./...` before finishing. Tests live in `maven`
-  (`Scan`/classpath) and `spring` (placeholder resolution, imports, topic matching); add to
-  those when changing the heuristics.
+  (`Scan`/classpath), `spring` (placeholder resolution, imports, topic matching,
+  request/reply detection), `graph` (edge directions) and `swcat` (reported relations); add
+  to those when changing the heuristics.

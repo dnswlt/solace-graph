@@ -512,3 +512,107 @@ app:
 		}
 	}
 }
+
+func TestFlattenListOfMapsAcrossFiles(t *testing.T) {
+	// Lists of maps from several files must be appended, not overwrite each other:
+	// map items never occupy the plain "prefix[i]" key, only "prefix[i].field".
+	dir := t.TempDir()
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("application-a.yml", `
+spring.cloud.stream.requestreply.bindingMapping:
+  - binding: one
+  - binding: two
+`)
+	write("application-b.yml", `
+spring.cloud.stream.requestreply.bindingMapping:
+  - binding: three
+`)
+	props, err := ReadApplicationProperties(dir, nil, nil)
+	if err != nil {
+		t.Fatalf("ReadApplicationProperties: %v", err)
+	}
+	var got []string
+	for i := range 3 {
+		got = append(got, props[fmt.Sprintf("spring.cloud.stream.requestreply.bindingMapping[%d].binding", i)])
+	}
+	sort.Strings(got)
+	if want := []string{"one", "three", "two"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("bindings: got %q, want %q", got, want)
+	}
+}
+
+func TestStreamBindingsRequestReply(t *testing.T) {
+	const prefix = "spring.cloud.stream."
+	props := map[string]string{
+		prefix + "default-binder":      "solace",
+		prefix + "binders.solace.type": "solace",
+		// Requester declared in a binding mapping, with a static request topic.
+		prefix + "bindings.reqA-out-0.destination":           "svc/a/request",
+		prefix + "bindings.reqA-in-0.destination":            "${replyTopicWithWildcards|reqA|*}",
+		prefix + "requestreply.bindingMapping[0].binding":    "reqA",
+		prefix + "requestreply.bindingMapping[0].replyTopic": "svc/a/reply/${replyTopicWithWildcards|uuid}",
+		// Requester recognised by its reply subscription only (no mapping).
+		prefix + "bindings.reqB-out-0.destination": "svc/b/request",
+		prefix + "bindings.reqB-in-0.destination":  "${replyTopicWithWildcards|reqB|*}",
+		// Requester with runtime destinations, declared via topic patterns
+		// (kebab-case spelling); the regex pattern is skipped.
+		prefix + "bindings.reqC-out-0.binder":                        "solace",
+		prefix + "requestreply.binding-mapping[1].binding":           "reqC",
+		prefix + "requestreply.binding-mapping[1].topic-patterns[0]": "svc/${STAGE}/c1/request",
+		prefix + "requestreply.binding-mapping[1].topic-patterns[1]": "svc/${STAGE}/c2/request",
+		prefix + "requestreply.binding-mapping[1].topic-patterns[2]": ".*c3/request",
+		// Plain producer and a replier's input: not requests.
+		prefix + "bindings.publish-out-0.destination": "svc/events",
+		prefix + "bindings.answerA-in-0.destination":  "svc/a/request",
+	}
+
+	type got struct {
+		name, dest string
+		dir        BindingDirection
+		request    bool
+		binder     string
+	}
+	var bs []got
+	for _, b := range StreamBindings(props) {
+		bs = append(bs, got{b.BindingName, b.Destination, b.Direction, b.Request, b.BinderType})
+	}
+	sort.Slice(bs, func(i, j int) bool {
+		if bs[i].name != bs[j].name {
+			return bs[i].name < bs[j].name
+		}
+		return bs[i].dest < bs[j].dest
+	})
+	want := []got{
+		{"answerA-in-0", "svc/a/request", BindingIn, false, "solace"},
+		{"publish-out-0", "svc/events", BindingOut, false, "solace"},
+		{"reqA-out-0", "svc/a/request", BindingOut, true, "solace"},
+		{"reqB-out-0", "svc/b/request", BindingOut, true, "solace"},
+		{"reqC-out-0", "svc/${STAGE}/c1/request", BindingOut, true, "solace"},
+		{"reqC-out-0", "svc/${STAGE}/c2/request", BindingOut, true, "solace"},
+	}
+	if !reflect.DeepEqual(bs, want) {
+		t.Errorf("bindings:\n got %v\nwant %v", bs, want)
+	}
+}
+
+func TestIsRegexPattern(t *testing.T) {
+	tests := []struct {
+		pattern string
+		want    bool
+	}{
+		{"svc/${STAGE}/v1/foo/request", false},
+		{"svc.v1.foo.request", false},
+		{".*topo/Foo/request", true},
+		{"svc/(a|b)/request", true},
+		{"svc/[^/]+/request", true},
+	}
+	for _, tt := range tests {
+		if got := isRegexPattern(tt.pattern); got != tt.want {
+			t.Errorf("isRegexPattern(%q) = %v, want %v", tt.pattern, got, tt.want)
+		}
+	}
+}

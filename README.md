@@ -114,5 +114,15 @@ Pass `-v` before the command for debug logging, e.g. `sgraph -v collect ...`.
    - Unresolved property placeholders act as a single-level wildcard, so a producer and
      consumer that differ only by an environment-specific segment still match.
    - Request/reply reply-topics (`${replyTopicWithWildcards|...}`) are dropped.
-4. **Graph construction**: one node per application, with directed edges representing
-   dependencies (producing to / consuming from another application).
+4. **Request/reply**: the request topic is what links requester and replier (the reply
+   topic is generated per request). A requester is recognised by a
+   `spring.cloud.stream.requestreply.bindingMapping` entry naming its binding, or by an
+   input binding subscribed to a `${replyTopicWithWildcards|...}` reply topic; its output
+   binding is marked as a request binding. Requests sent to runtime-chosen destinations
+   have no static `destination`; for those, the mapping's `topicPatterns` are used as
+   request topics. Patterns using regex syntax (e.g. `.*foo/request`) are skipped; write
+   them as plain topics (placeholders allowed) to have them matched.
+5. **Graph construction**: one node per application, with directed edges representing
+   dependencies. A consumer depends on the producer of a topic, but a requester depends on
+   the replier, i.e. the consumer of its request topic. `swcat` reports the former as
+   *consumes*, the latter as *calls*.
