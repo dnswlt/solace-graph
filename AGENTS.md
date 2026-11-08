@@ -25,9 +25,25 @@ lives in the code.
   `spring.config.import`, resolve `${...}` with relaxed binding
   (case/dash/underscore-insensitive). YAML only.
 
-- **Profiles are filtered, not simulated.** `-exclude-profile` drops files by name; profile
-  activation (`spring.profiles.active`, profile groups) is deliberately not modelled —
-  don't add it without a concrete reason.
+- **Profiles are filtered, not simulated.** `-exclude-profile` drops files by name; every
+  other profile file is merged (the union of all profiles). Profile activation
+  (`spring.profiles.active`, `include`, groups, `on-profile` documents) is deliberately
+  not modelled. This was evaluated against a large real-world multi-repo code base: an
+  activation model lost a substantial share of real bindings and gained nothing over
+  "union + exclude `local|dev|test`". The losses came from:
+  - profiles activated outside the code (deployment env vars, per-process modes such as
+    `on-profile: export`), so the repo alone declares no or only partial activation;
+  - library modules whose profile files are loaded by the deploying application through
+    custom mechanisms (`EnvironmentPostProcessor` with `classpath*:` patterns, or
+    `spring.config.import` from another module) rather than through Spring profiles;
+  - profile names containing placeholders (`kafka-${KAFKA_PROFILE}`), which are
+    ambiguous either way.
+
+  Making the merge order Spring-accurate (imports override their importer, last document
+  wins) was evaluated too and changed no bindings, so it hasn't been done. Don't add
+  either without a concrete case where it changes the graph. The real risk of the union is
+  developer profiles shadowing real values (first file by name wins), which
+  `-exclude-profile` addresses.
 
 - **Unresolved `${VAR}` is kept; defaults are not substituted** — a compile-time
   `${VAR:default}` rarely matches the deployed value. Kept placeholders become single-level

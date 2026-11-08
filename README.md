@@ -27,6 +27,11 @@ sgraph collect [-exclude-profile <regex>]... [-exclude-app <regex>]... <root> [<
 
 - `-exclude-profile <regex>`: skip `application-<profile>.yml` files whose profile suffix
   matches (e.g. `dev|test`). Repeatable. Base `application.yml` is never excluded.
+  **Recommended:** exclude developer and test profiles, e.g.
+  `-exclude-profile 'local|dev|test'`. All remaining profile files are merged, and when
+  several define the same property the file read first (by name) wins — so without the
+  exclusion, a hard-coded value in `application-local.yml` can shadow the real
+  (placeholder-based) destination in, say, `application-solace.yml`.
 - `-exclude-app <regex>`: skip applications whose artifactId matches. Repeatable.
 - `<root>`: one or more directories to scan recursively for `pom.xml` modules.
 
@@ -93,8 +98,12 @@ Pass `-v` before the command for debug logging, e.g. `sgraph -v collect ...`.
    - `classpath:` imports are resolved against a **simulated classpath**: the module's own
      resources plus the resources of the modules it (transitively) depends on, per the
      `<dependencies>` in its `pom.xml`.
-   - `-exclude-profile` filters profile-specific files by name. Profile *activation* (e.g.
-     `spring.profiles.active`, profile groups) is **not** simulated.
+   - All profile-specific files are read, as the union of every profile, minus those
+     filtered by name with `-exclude-profile`. Profile *activation* (e.g.
+     `spring.profiles.active`, profile groups, `spring.config.activate.on-profile`) is
+     **not** simulated: in practice the active profiles are often chosen outside the code
+     (deployment environment variables, process modes), so simulating activation from the
+     repository alone drops real bindings.
    - Unresolved `${VAR}` placeholders are kept as-is (defaults like `${VAR:x}` are **not**
      substituted), so matching stays environment-agnostic.
 3. **Binding matching**:
