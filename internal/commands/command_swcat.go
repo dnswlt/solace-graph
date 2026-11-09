@@ -127,8 +127,11 @@ func Swcat(out io.Writer, args []string) error {
 			totalEndpoints += n
 		}
 	}
-	fmt.Fprintf(out, "\nreporting %d endpoints of %d source components (%d messages, the rest clearing previous observations)\n",
-		totalEndpoints, withEndpoints, len(obs))
+	fmt.Fprintf(out, "\nreporting %d endpoints of %d source components", totalEndpoints, withEndpoints)
+	if empty := len(obs) - withEndpoints; empty > 0 {
+		fmt.Fprintf(out, ", and clearing the observations of %d without endpoints", empty)
+	}
+	fmt.Fprintln(out)
 
 	if *dryRun {
 		for _, oe := range obs {
